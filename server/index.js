@@ -122,6 +122,52 @@ const streamToBuffer = async (stream) => {
 // REST API ROUTES
 // -------------------------------------------------------------
 
+// -------------------------------------------------------------
+// AUTHENTICATION & SECURITY
+// -------------------------------------------------------------
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'shi*&^874sdf8sdafjh!!!!!#@@@@';
+
+// Login endpoint
+app.post('/api/v1/auth/login', (req, res) => {
+  const { username, password } = req.body || {};
+  if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+    const tokenPayload = Buffer.from(
+      JSON.stringify({
+        username: ADMIN_USERNAME,
+        role: 'admin',
+        iat: Date.now(),
+        exp: Date.now() + 30 * 24 * 60 * 60 * 1000, // 30 days persistent session
+      })
+    ).toString('base64');
+
+    return res.json({
+      success: true,
+      token: tokenPayload,
+      user: {
+        username: ADMIN_USERNAME,
+        role: 'admin',
+      },
+    });
+  }
+  return res.status(401).json({ success: false, error: 'Invalid username or password' });
+});
+
+// Verify session endpoint
+app.get('/api/v1/auth/verify', (req, res) => {
+  const authHeader = req.headers['authorization'];
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.substring(7);
+    try {
+      const decoded = JSON.parse(Buffer.from(token, 'base64').toString('utf-8'));
+      if (decoded.username === ADMIN_USERNAME && (!decoded.exp || decoded.exp > Date.now())) {
+        return res.json({ success: true, user: { username: decoded.username, role: decoded.role } });
+      }
+    } catch {}
+  }
+  return res.status(401).json({ success: false, error: 'Invalid or expired session' });
+});
+
 // Health check & Storage Status
 app.get('/health', (req, res) => {
   res.json({
@@ -130,6 +176,7 @@ app.get('/health', (req, res) => {
     bucket: isS3Configured ? AWS_S3_BUCKET : null,
     region: isS3Configured ? AWS_REGION : null,
     collabStatus: 'online',
+    authEnabled: true,
     timestamp: new Date().toISOString(),
   });
 });

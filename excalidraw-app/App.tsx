@@ -109,6 +109,7 @@ import {
   exportToExcalidrawPlus,
 } from "./components/ExportToExcalidrawPlus";
 import { TopErrorBoundary } from "./components/TopErrorBoundary";
+import { GlobalAuthGate } from "./components/GlobalAuthGate";
 
 import {
   exportToBackend,
@@ -1346,11 +1347,13 @@ const ExcalidrawApp = () => {
 
   return (
     <TopErrorBoundary>
-      <Provider store={appJotaiStore}>
-        <ExcalidrawAPIProvider>
-          <ExcalidrawWrapper />
-        </ExcalidrawAPIProvider>
-      </Provider>
+      <GlobalAuthGate>
+        <Provider store={appJotaiStore}>
+          <ExcalidrawAPIProvider>
+            <ExcalidrawWrapper />
+          </ExcalidrawAPIProvider>
+        </Provider>
+      </GlobalAuthGate>
     </TopErrorBoundary>
   );
 };
