@@ -18,6 +18,7 @@ import { saveDebugState } from "./DebugCanvas";
 
 export const AppMainMenu: React.FC<{
   onCollabDialogOpen: () => any;
+  onS3BoardsDialogOpen?: () => void;
   isCollaborating: boolean;
   isCollabEnabled: boolean;
   theme: Theme | "system";
@@ -30,6 +31,30 @@ export const AppMainMenu: React.FC<{
       <MainMenu.DefaultItems.SaveToActiveFile />
       <MainMenu.DefaultItems.Export />
       <MainMenu.DefaultItems.SaveAsImage />
+      {props.onS3BoardsDialogOpen && (
+        <MainMenu.Item
+          icon={
+            <svg
+              aria-hidden="true"
+              focusable="false"
+              role="img"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              style={{ width: "1.1em", height: "1.1em" }}
+            >
+              <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" />
+            </svg>
+          }
+          onSelect={() => props.onS3BoardsDialogOpen?.()}
+          className="highlighted"
+        >
+          Cloud Boards (AWS S3)
+        </MainMenu.Item>
+      )}
       {props.isCollabEnabled && (
         <MainMenu.DefaultItems.LiveCollaborationTrigger
           isCollaborating={props.isCollaborating}

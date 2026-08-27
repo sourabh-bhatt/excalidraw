@@ -1,29 +1,52 @@
+# OS & Editor
 .DS_Store
-.env.development.local
-.env.local
-.env.production.local
-.env.test.local
-.envrc
-.eslintcache
-.history
+Thumbs.db
 .idea
-.vercel
 .vscode
-.yarn
-*.log
-*.tgz
-build
-dist
-firebase
-logs
-node_modules
+.history
+.claude
+
+# Environment Variables & Secrets
+.env
+.env.*
+!.env.example
+*.env
+server/.env
+server/.env.*
+!server/.env.example
+
+# SSH Keys & Certs
+*.pem
+*.key
+*.crt
+*.cert
+*.pub
+LightsailDefaultKey*.pem
+
+# Local Storage & Uploads
+local-storage/
+server/local-storage/
+
+# Node & Package Managers
+node_modules/
 npm-debug.log*
-package-lock.json
 yarn-debug.log*
 yarn-error.log*
+package-lock.json
+.yarn
+.eslintcache
+
+# Archives & Builds
+build/
+dist/
+dev-dist/
+coverage/
+*.log
+*.tgz
+*.tar.gz
+*.zip
 packages/excalidraw/types
-coverage
-dev-dist
-html
+
+# Vercel & Misc
+.vercel
 meta*.json
-.claude

@@ -1,0 +1,19 @@
+{
+  "name": "excalidraw-s3-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Self-hosted AWS S3 backend and database for Excalidraw",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.758.0",
+    "@aws-sdk/s3-request-presigner": "^3.758.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "socket.io": "^4.8.3"
+  }
+}

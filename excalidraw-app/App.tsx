@@ -102,6 +102,8 @@ import Collab, {
 import { AppFooter } from "./components/AppFooter";
 import { AppMainMenu } from "./components/AppMainMenu";
 import { AppWelcomeScreen } from "./components/AppWelcomeScreen";
+import { S3BoardsDialog } from "./components/S3BoardsDialog";
+import { loadSceneFromS3 } from "./data/s3Storage";
 import {
   ExportToExcalidrawPlus,
   exportToExcalidrawPlus,
@@ -225,6 +227,9 @@ const initializeScene = async (opts: {
 > => {
   const searchParams = new URLSearchParams(window.location.search);
   const id = searchParams.get("id");
+  const boardId =
+    searchParams.get("board") ||
+    window.location.hash.match(/^#board=([a-zA-Z0-9_-]+)$/)?.[1];
   const jsonBackendMatch = window.location.hash.match(
     /^#json=([a-zA-Z0-9_-]+),([a-zA-Z0-9_-]+)$/,
   );
@@ -248,7 +253,7 @@ const initializeScene = async (opts: {
   };
 
   let roomLinkData = getCollaborationLinkData(window.location.href);
-  const isExternalScene = !!(id || jsonBackendMatch || roomLinkData);
+  const isExternalScene = !!(id || boardId || jsonBackendMatch || roomLinkData);
   if (isExternalScene) {
     if (
       // don't prompt if scene is empty
@@ -258,7 +263,29 @@ const initializeScene = async (opts: {
       // otherwise, prompt whether user wants to override current scene
       (await openConfirmModal(shareableLinkConfirmDialog))
     ) {
-      if (jsonBackendMatch) {
+      if (boardId) {
+        try {
+          const imported = await loadSceneFromS3(boardId);
+          scene = {
+            elements: bumpElementVersions(
+              restoreElements(imported.elements, null, {
+                repairBindings: true,
+                deleteInvisibleElements: true,
+              }),
+              localDataState?.elements,
+            ),
+            appState: restoreAppState(
+              imported.appState,
+              localDataState?.appState,
+            ),
+          };
+          if (imported.files) {
+            opts.excalidrawAPI.addFiles(Object.values(imported.files));
+          }
+        } catch (err) {
+          console.error("Failed to load S3 board", err);
+        }
+      } else if (jsonBackendMatch) {
         const imported = await importFromBackend(
           jsonBackendMatch[1],
           jsonBackendMatch[2],
@@ -451,6 +478,7 @@ const ExcalidrawWrapper = () => {
   });
 
   const [, forceRefresh] = useState(false);
+  const [isS3BoardsDialogOpen, setIsS3BoardsDialogOpen] = useState(false);
 
   useEffect(() => {
     if (isDevEnv()) {
@@ -1029,6 +1057,7 @@ const ExcalidrawWrapper = () => {
       >
         <AppMainMenu
           onCollabDialogOpen={onCollabDialogOpen}
+          onS3BoardsDialogOpen={() => setIsS3BoardsDialogOpen(true)}
           isCollaborating={isCollaborating}
           isCollabEnabled={!isCollabDisabled}
           theme={appTheme}
@@ -1101,6 +1130,13 @@ const ExcalidrawWrapper = () => {
         />
 
         <AppSidebar />
+
+        {isS3BoardsDialogOpen && (
+          <S3BoardsDialog
+            onClose={() => setIsS3BoardsDialogOpen(false)}
+            excalidrawAPI={excalidrawAPI}
+          />
+        )}
 
         {errorMessage && (
           <ErrorDialog onClose={() => setErrorMessage("")}>
