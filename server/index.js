@@ -53,17 +53,31 @@ io.on('connection', (socket) => {
   });
 
   socket.on('server-broadcast', (roomId, encryptedData, iv) => {
-    socket.to(roomId).emit('server-broadcast', roomId, encryptedData, iv);
+    socket.to(roomId).emit('client-broadcast', encryptedData, iv);
   });
 
   socket.on('server-volatile-broadcast', (roomId, encryptedData, iv) => {
-    socket.to(roomId).volatile.emit('server-volatile-broadcast', roomId, encryptedData, iv);
+    socket.to(roomId).volatile.emit('client-broadcast', encryptedData, iv);
   });
 
   socket.on('user-follow', async (payload) => {
-    const roomId = socket.data.roomId;
-    if (roomId) {
-      socket.to(roomId).emit('user-follow', payload);
+    if (!payload || !payload.userToFollow || !payload.userToFollow.socketId) return;
+    const room = `follow@${payload.userToFollow.socketId}`;
+    switch (payload.action) {
+      case 'FOLLOW': {
+        await socket.join(room);
+        const sockets = await io.in(room).allSockets();
+        const followedBy = Array.from(sockets);
+        io.to(payload.userToFollow.socketId).emit('user-follow-room-change', followedBy);
+        break;
+      }
+      case 'UNFOLLOW': {
+        await socket.leave(room);
+        const sockets = await io.in(room).allSockets();
+        const followedBy = Array.from(sockets);
+        io.to(payload.userToFollow.socketId).emit('user-follow-room-change', followedBy);
+        break;
+      }
     }
   });
 
@@ -106,10 +120,12 @@ if (isS3Configured) {
 const LOCAL_STORAGE_DIR = path.join(__dirname, 'local-storage');
 const LOCAL_SCENES_DIR = path.join(LOCAL_STORAGE_DIR, 'scenes');
 const LOCAL_FILES_DIR = path.join(LOCAL_STORAGE_DIR, 'files');
+const LOCAL_ROOMS_DIR = path.join(LOCAL_STORAGE_DIR, 'rooms');
 
 if (!isS3Configured) {
   fs.mkdirSync(LOCAL_SCENES_DIR, { recursive: true });
   fs.mkdirSync(LOCAL_FILES_DIR, { recursive: true });
+  fs.mkdirSync(LOCAL_ROOMS_DIR, { recursive: true });
 }
 
 const streamToBuffer = async (stream) => {
@@ -417,6 +433,68 @@ app.get('/api/v1/files/:id', async (req, res) => {
     }
   } catch (err) {
     console.error('Error fetching file:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 7. SAVE OR UPDATE ENCRYPTED COLLAB ROOM
+app.post('/api/v1/rooms/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const bodyData = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+
+    if (isS3Configured) {
+      await s3.send(
+        new PutObjectCommand({
+          Bucket: AWS_S3_BUCKET,
+          Key: `rooms/${id}.json`,
+          Body: bodyData,
+          ContentType: 'application/json',
+        })
+      );
+    } else {
+      fs.writeFileSync(path.join(LOCAL_ROOMS_DIR, `${id}.json`), bodyData, 'utf-8');
+    }
+
+    res.json({ success: true, id, message: 'Room saved successfully' });
+  } catch (err) {
+    console.error('Error saving room scene:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 8. LOAD ENCRYPTED COLLAB ROOM
+app.get('/api/v1/rooms/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (isS3Configured) {
+      try {
+        const response = await s3.send(
+          new GetObjectCommand({
+            Bucket: AWS_S3_BUCKET,
+            Key: `rooms/${id}.json`,
+          })
+        );
+        const buffer = await streamToBuffer(response.Body);
+        const roomData = JSON.parse(buffer.toString('utf-8'));
+        return res.json(roomData);
+      } catch (s3Err) {
+        if (s3Err.name === 'NoSuchKey' || s3Err.$metadata?.httpStatusCode === 404) {
+          return res.status(404).json({ error: 'Room not found in S3' });
+        }
+        throw s3Err;
+      }
+    } else {
+      const filePath = path.join(LOCAL_ROOMS_DIR, `${id}.json`);
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: 'Room not found locally' });
+      }
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      return res.json(data);
+    }
+  } catch (err) {
+    console.error('Error loading room scene:', err);
     res.status(500).json({ error: err.message });
   }
 });

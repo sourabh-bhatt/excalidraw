@@ -23,6 +23,8 @@ export const GlobalAuthGate: React.FC<GlobalAuthGateProps> = ({ children }) => {
     setCheckingSession(false);
   }, []);
 
+  const isRoomLink = typeof window !== "undefined" && window.location.hash.startsWith("#room=");
+
   const handleLogin = async (e?: React.FormEvent) => {
     if (e) {
       e.preventDefault();
@@ -53,7 +55,7 @@ export const GlobalAuthGate: React.FC<GlobalAuthGateProps> = ({ children }) => {
     );
   }
 
-  if (isAuthenticated) {
+  if (isAuthenticated || isRoomLink) {
     return <>{children}</>;
   }
 
