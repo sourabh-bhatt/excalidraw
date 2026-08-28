@@ -6,21 +6,27 @@ import {
   loadSceneFromS3,
   deleteS3Scene,
   checkBackendHealth,
+  getBoardUrl,
+  activeBoardAtom,
   type S3SceneMetadata,
 } from "../data/s3Storage";
+import { useAtom } from "../app-jotai";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import "./S3BoardsDialog.scss";
 
 interface S3BoardsDialogProps {
   onClose: () => void;
   excalidrawAPI: ExcalidrawImperativeAPI | null;
+  onStartCollab?: () => void;
 }
 
 export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
   onClose,
   excalidrawAPI,
+  onStartCollab,
 }) => {
-  const [boardName, setBoardName] = useState("");
+  const [activeBoard, setActiveBoard] = useAtom(activeBoardAtom);
+  const [boardName, setBoardName] = useState(activeBoard.name || "");
   const [scenes, setScenes] = useState<S3SceneMetadata[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -29,7 +35,7 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
     bucket: string | null;
     region: string | null;
   } | null>(null);
-  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [message, setMessage] = useState<{ type: "success" | "error" | "info"; text: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
   const refreshList = async () => {
@@ -40,11 +46,13 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
         listS3Scenes().catch(() => []),
       ]);
       setStatusInfo(health);
-      setScenes(items.sort((a, b) => {
-        const timeA = a.lastModified ? new Date(a.lastModified).getTime() : 0;
-        const timeB = b.lastModified ? new Date(b.lastModified).getTime() : 0;
-        return timeB - timeA;
-      }));
+      setScenes(
+        items.sort((a, b) => {
+          const timeA = a.lastModified ? new Date(a.lastModified).getTime() : 0;
+          const timeB = b.lastModified ? new Date(b.lastModified).getTime() : 0;
+          return timeB - timeA;
+        }),
+      );
     } catch (err: any) {
       setMessage({ type: "error", text: "Failed to connect to storage backend" });
     } finally {
@@ -70,14 +78,34 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
       const files = excalidrawAPI.getFiles();
 
       const result = await saveSceneToS3({
+        id: activeBoard.id || undefined,
         name,
         elements,
         appState,
         files,
+        collabRoomId: activeBoard.collabRoomId,
+        collabRoomKey: activeBoard.collabRoomKey,
+        lastCollabAt: activeBoard.lastCollabAt,
       });
 
+      setActiveBoard({
+        id: result.id,
+        name,
+        lastSavedAt: Date.now(),
+        isSaving: false,
+        collabRoomId: activeBoard.collabRoomId,
+        collabRoomKey: activeBoard.collabRoomKey,
+        lastCollabAt: activeBoard.lastCollabAt,
+      });
+
+      const newUrl = getBoardUrl(result.id, activeBoard.collabRoomId && activeBoard.collabRoomKey ? {
+        roomId: activeBoard.collabRoomId,
+        roomKey: activeBoard.collabRoomKey,
+      } : null);
+      window.history.pushState({}, name, newUrl);
+      document.title = `${name} - Excalidraw`;
+
       setMessage({ type: "success", text: `Successfully saved "${name}" to S3!` });
-      setBoardName("");
       await refreshList();
     } catch (err: any) {
       setMessage({ type: "error", text: err.message || "Failed to save to S3" });
@@ -86,13 +114,13 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
     }
   };
 
-  const handleLoad = async (id: string) => {
+  const handleLoad = async (scene: S3SceneMetadata) => {
     if (!excalidrawAPI) return;
     setLoading(true);
     setMessage(null);
 
     try {
-      const sceneData = await loadSceneFromS3(id);
+      const sceneData = await loadSceneFromS3(scene.id);
       excalidrawAPI.updateScene({
         elements: sceneData.elements,
         appState: {
@@ -104,10 +132,24 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
         excalidrawAPI.addFiles(Object.values(sceneData.files));
       }
 
-      setMessage({ type: "success", text: `Loaded board "${sceneData.name || id}"!` });
+      setActiveBoard({
+        id: scene.id,
+        name: sceneData.name || scene.id,
+        lastSavedAt: Date.now(),
+        isSaving: false,
+        collabRoomId: sceneData.collabRoomId || scene.collabRoomId,
+        collabRoomKey: sceneData.collabRoomKey || scene.collabRoomKey,
+        lastCollabAt: sceneData.lastCollabAt || scene.lastCollabAt,
+      });
+
+      const newUrl = getBoardUrl(scene.id);
+      window.history.pushState({}, sceneData.name || scene.id, newUrl);
+      document.title = `${sceneData.name || scene.id} - Excalidraw`;
+
+      setMessage({ type: "success", text: `Loaded board "${sceneData.name || scene.id}"!` });
       setTimeout(() => {
         onClose();
-      }, 700);
+      }, 500);
     } catch (err: any) {
       setMessage({ type: "error", text: err.message || "Failed to load board" });
     } finally {
@@ -115,7 +157,68 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
     }
   };
 
-  const handleDelete = async (id: string, name: string) => {
+  const handleJoinLive = async (scene: S3SceneMetadata) => {
+    if (!scene.collabRoomId || !scene.collabRoomKey) {
+      // If no room exists yet, open board and start collab
+      await handleLoad(scene);
+      onClose();
+      onStartCollab?.();
+      return;
+    }
+
+    const liveUrl = getBoardUrl(scene.id, {
+      roomId: scene.collabRoomId,
+      roomKey: scene.collabRoomKey,
+    });
+    window.location.href = liveUrl;
+    window.location.reload();
+  };
+
+  const handleCopyBoardUrl = (scene: S3SceneMetadata, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const url = getBoardUrl(scene.id);
+    navigator.clipboard.writeText(url);
+    setMessage({ type: "info", text: `📋 Board URL copied: ${url}` });
+  };
+
+  const handleCopyLiveUrl = (scene: S3SceneMetadata, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!scene.collabRoomId || !scene.collabRoomKey) return;
+    const url = getBoardUrl(scene.id, {
+      roomId: scene.collabRoomId,
+      roomKey: scene.collabRoomKey,
+    });
+    navigator.clipboard.writeText(url);
+    setMessage({ type: "info", text: `🔗 Live Collab link copied: ${url}` });
+  };
+
+  const handleNewBoard = () => {
+    if (!excalidrawAPI) return;
+    if (
+      excalidrawAPI.getSceneElements().length > 0 &&
+      !window.confirm("Start a new blank board? Unsaved local changes will be cleared.")
+    ) {
+      return;
+    }
+
+    const newId = `board_${Date.now()}`;
+    excalidrawAPI.resetScene();
+    setActiveBoard({
+      id: newId,
+      name: "Untitled Board",
+      lastSavedAt: null,
+      isSaving: false,
+    });
+
+    const newUrl = getBoardUrl(newId);
+    window.history.pushState({}, "Untitled Board", newUrl);
+    document.title = `Untitled Board - Excalidraw`;
+    setBoardName("Untitled Board");
+    setMessage({ type: "info", text: "Created new blank board! Type a name and save to S3." });
+  };
+
+  const handleDelete = async (id: string, name: string, e: React.MouseEvent) => {
+    e.stopPropagation();
     if (!window.confirm(`Are you sure you want to delete "${name || id}" from S3?`)) {
       return;
     }
@@ -123,6 +226,10 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
     try {
       await deleteS3Scene(id);
       setScenes((prev) => prev.filter((s) => s.id !== id));
+      if (activeBoard.id === id) {
+        setActiveBoard({ id: null, name: null, lastSavedAt: null, isSaving: false });
+        window.history.pushState({}, "Excalidraw", window.location.origin + window.location.pathname);
+      }
       setMessage({ type: "success", text: `Deleted "${name || id}"` });
     } catch (err: any) {
       setMessage({ type: "error", text: err.message || "Failed to delete board" });
@@ -130,7 +237,7 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
   };
 
   const filteredScenes = scenes.filter((s) =>
-    (s.name || s.id).toLowerCase().includes(searchQuery.toLowerCase())
+    (s.name || s.id).toLowerCase().includes(searchQuery.toLowerCase()),
   );
 
   return (
@@ -157,10 +264,31 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
                 : "Storage Backend Offline"}
             </span>
           </div>
-          <button className="s3-refresh-btn" onClick={refreshList} disabled={loading}>
-            🔄 Refresh
-          </button>
+          <div className="s3-header-actions">
+            <button className="s3-btn-small" onClick={handleNewBoard} title="Start new board">
+              ➕ New Board
+            </button>
+            <button className="s3-refresh-btn" onClick={refreshList} disabled={loading}>
+              🔄 Refresh
+            </button>
+          </div>
         </div>
+
+        {activeBoard.id && (
+          <div className="s3-active-board-banner">
+            <span className="banner-icon">📌</span>
+            <span className="banner-text">
+              Active Board: <strong>{activeBoard.name || activeBoard.id}</strong>
+              {activeBoard.isSaving ? " (Saving to S3...)" : " (Auto-saves to S3)"}
+            </span>
+            <button
+              className="s3-btn-link"
+              onClick={(e) => handleCopyBoardUrl({ id: activeBoard.id!, name: activeBoard.name || activeBoard.id! }, e)}
+            >
+              📋 Copy Board URL
+            </button>
+          </div>
+        )}
 
         {message && (
           <div className={`s3-alert s3-alert-${message.type}`}>
@@ -170,7 +298,7 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
 
         {/* Save Current Board Section */}
         <div className="s3-save-section">
-          <h3>💾 Save Current Canvas to Cloud</h3>
+          <h3>💾 Save Canvas to Cloud</h3>
           <form onSubmit={handleSave} className="s3-save-form">
             <input
               type="text"
@@ -180,7 +308,7 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
               className="s3-input"
             />
             <button type="submit" className="s3-btn s3-btn-primary" disabled={saving}>
-              {saving ? "Saving..." : "Save to Cloud"}
+              {saving ? "Saving..." : activeBoard.id ? "Update S3 Board" : "Save to Cloud"}
             </button>
           </form>
         </div>
@@ -212,36 +340,97 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
             </div>
           ) : (
             <div className="s3-boards-grid">
-              {filteredScenes.map((scene) => (
-                <div key={scene.id} className="s3-board-card">
-                  <div className="s3-card-info">
-                    <h4 className="s3-card-title">{scene.name || scene.id}</h4>
-                    <span className="s3-card-meta">
-                      {scene.lastModified
-                        ? `Modified: ${new Date(scene.lastModified).toLocaleString()}`
-                        : "Saved"}
-                      {scene.size ? ` • ${(scene.size / 1024).toFixed(1)} KB` : ""}
-                    </span>
+              {filteredScenes.map((scene) => {
+                const isActive = activeBoard.id === scene.id;
+                const hasCollab = !!(scene.collabRoomId || scene.lastCollabAt);
+
+                return (
+                  <div
+                    key={scene.id}
+                    className={`s3-board-card ${isActive ? "active-board-card" : ""}`}
+                  >
+                    <div className="s3-card-info">
+                      <div className="s3-title-row">
+                        <h4 className="s3-card-title">{scene.name || scene.id}</h4>
+                        {isActive && <span className="s3-badge-active">Active</span>}
+                      </div>
+
+                      <div className="s3-card-meta">
+                        <span>
+                          {scene.lastModified
+                            ? `Modified: ${new Date(scene.lastModified).toLocaleString()}`
+                            : "Saved"}
+                          {scene.size ? ` • ${(scene.size / 1024).toFixed(1)} KB` : ""}
+                        </span>
+                      </div>
+
+                      {hasCollab && (
+                        <div className="s3-collab-meta">
+                          <span className="live-badge">
+                            <span className="live-dot" />
+                            Live Session
+                          </span>
+                          {scene.lastCollabAt && (
+                            <span className="live-date">
+                              {new Date(scene.lastCollabAt).toLocaleString([], {
+                                dateStyle: "short",
+                                timeStyle: "short",
+                              })}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="s3-card-actions">
+                      {hasCollab && scene.collabRoomId && (
+                        <button
+                          className="s3-btn s3-btn-collab"
+                          onClick={() => handleJoinLive(scene)}
+                          title="Join Live Collaboration Session"
+                        >
+                          ⚡ Join Live
+                        </button>
+                      )}
+
+                      <button
+                        className="s3-btn s3-btn-secondary"
+                        onClick={() => handleLoad(scene)}
+                        disabled={loading}
+                        title="Load into Canvas"
+                      >
+                        Open
+                      </button>
+
+                      <button
+                        className="s3-btn s3-btn-icon"
+                        onClick={(e) => handleCopyBoardUrl(scene, e)}
+                        title="Copy Board URL"
+                      >
+                        📋
+                      </button>
+
+                      {hasCollab && scene.collabRoomId && (
+                        <button
+                          className="s3-btn s3-btn-icon"
+                          onClick={(e) => handleCopyLiveUrl(scene, e)}
+                          title="Copy Live Collab URL"
+                        >
+                          🔗
+                        </button>
+                      )}
+
+                      <button
+                        className="s3-btn s3-btn-danger"
+                        onClick={(e) => handleDelete(scene.id, scene.name, e)}
+                        title="Delete from S3"
+                      >
+                        🗑️
+                      </button>
+                    </div>
                   </div>
-                  <div className="s3-card-actions">
-                    <button
-                      className="s3-btn s3-btn-secondary"
-                      onClick={() => handleLoad(scene.id)}
-                      disabled={loading}
-                      title="Load into Canvas"
-                    >
-                      Open
-                    </button>
-                    <button
-                      className="s3-btn s3-btn-danger"
-                      onClick={() => handleDelete(scene.id, scene.name)}
-                      title="Delete from S3"
-                    >
-                      🗑️
-                    </button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

@@ -64,6 +64,7 @@ import {
 import type { RemoteExcalidrawElement } from "@excalidraw/excalidraw/data/reconcile";
 import type { RestoredDataState } from "@excalidraw/excalidraw/data/restore";
 import type {
+  ExcalidrawElement,
   FileId,
   NonDeletedExcalidrawElement,
   OrderedExcalidrawElement,
@@ -103,7 +104,12 @@ import { AppFooter } from "./components/AppFooter";
 import { AppMainMenu } from "./components/AppMainMenu";
 import { AppWelcomeScreen } from "./components/AppWelcomeScreen";
 import { S3BoardsDialog } from "./components/S3BoardsDialog";
-import { loadSceneFromS3 } from "./data/s3Storage";
+import {
+  loadSceneFromS3,
+  saveSceneToS3,
+  linkCollabToS3Scene,
+  activeBoardAtom,
+} from "./data/s3Storage";
 import {
   ExportToExcalidrawPlus,
   exportToExcalidrawPlus,
@@ -283,6 +289,16 @@ const initializeScene = async (opts: {
           if (imported.files) {
             opts.excalidrawAPI.addFiles(Object.values(imported.files));
           }
+          appJotaiStore.set(activeBoardAtom, {
+            id: boardId,
+            name: imported.name || boardId,
+            lastSavedAt: Date.now(),
+            isSaving: false,
+            collabRoomId: imported.collabRoomId,
+            collabRoomKey: imported.collabRoomKey,
+            lastCollabAt: imported.lastCollabAt,
+          });
+          document.title = `${imported.name || boardId} - Excalidraw`;
         } catch (err) {
           console.error("Failed to load S3 board", err);
         }
@@ -309,7 +325,7 @@ const initializeScene = async (opts: {
         };
       }
       scene.scrollToContent = true;
-      if (!roomLinkData) {
+      if (!roomLinkData && !boardId && !id) {
         window.history.replaceState({}, APP_NAME, window.location.origin);
       }
     } else {
@@ -440,6 +456,66 @@ const ExcalidrawWrapper = () => {
   });
   const collabError = useAtomValue(collabErrorIndicatorAtom);
   const userToFollow = useAtomValue(userToFollowAtom);
+  const [activeBoard, setActiveBoard] = useAtom(activeBoardAtom);
+
+  const debouncedSaveToS3 = useMemo(() => {
+    return debounce(
+      async (
+        boardId: string,
+        boardName: string,
+        elements: readonly ExcalidrawElement[],
+        appState: Partial<AppState>,
+        files: BinaryFiles,
+        collabRoomId?: string | null,
+        collabRoomKey?: string | null,
+        lastCollabAt?: string | null,
+      ) => {
+        try {
+          setActiveBoard((prev) => ({ ...prev, isSaving: true }));
+          await saveSceneToS3({
+            id: boardId,
+            name: boardName,
+            elements,
+            appState,
+            files,
+            collabRoomId,
+            collabRoomKey,
+            lastCollabAt,
+          });
+          setActiveBoard((prev) => ({
+            ...prev,
+            isSaving: false,
+            lastSavedAt: Date.now(),
+          }));
+        } catch (e) {
+          console.warn("Auto-save to S3 failed:", e);
+          setActiveBoard((prev) => ({ ...prev, isSaving: false }));
+        }
+      },
+      1500,
+    );
+  }, [setActiveBoard]);
+
+  // Link active board with live collaboration room in S3
+  useEffect(() => {
+    if (isCollaborating && activeBoard.id) {
+      const roomData = getCollaborationLinkData(window.location.href);
+      if (roomData?.roomId && roomData?.roomKey) {
+        linkCollabToS3Scene(activeBoard.id, roomData.roomId, roomData.roomKey)
+          .then((res) => {
+            setActiveBoard((prev) => ({
+              ...prev,
+              collabRoomId: roomData.roomId,
+              collabRoomKey: roomData.roomKey,
+              lastCollabAt: res.lastCollabAt,
+            }));
+          })
+          .catch((err) =>
+            console.warn("Failed to link collab to S3 scene:", err),
+          );
+      }
+    }
+  }, [isCollaborating, activeBoard.id, setActiveBoard]);
 
   const viewportStatusFrame = useMemo(
     () =>
@@ -748,6 +824,19 @@ const ExcalidrawWrapper = () => {
   ) => {
     if (collabAPI?.isCollaborating()) {
       collabAPI.syncElements(elements);
+    }
+
+    if (activeBoard.id) {
+      debouncedSaveToS3(
+        activeBoard.id,
+        activeBoard.name || activeBoard.id,
+        elements,
+        appState,
+        files,
+        activeBoard.collabRoomId,
+        activeBoard.collabRoomKey,
+        activeBoard.lastCollabAt,
+      );
     }
 
     // this check is redundant, but since this is a hot path, it's best
@@ -1088,7 +1177,10 @@ const ExcalidrawWrapper = () => {
             </OverwriteConfirmDialog.Action>
           )}
         </OverwriteConfirmDialog>
-        <AppFooter onChange={() => excalidrawAPI?.refresh()} />
+        <AppFooter
+          onChange={() => excalidrawAPI?.refresh()}
+          onS3BoardsDialogOpen={() => setIsS3BoardsDialogOpen(true)}
+        />
         {excalidrawAPI && <AIComponents excalidrawAPI={excalidrawAPI} />}
 
         <TTDDialogTrigger />
@@ -1136,6 +1228,9 @@ const ExcalidrawWrapper = () => {
           <S3BoardsDialog
             onClose={() => setIsS3BoardsDialogOpen(false)}
             excalidrawAPI={excalidrawAPI}
+            onStartCollab={() =>
+              setShareDialogState({ isOpen: true, type: "collaborationOnly" })
+            }
           />
         )}
 

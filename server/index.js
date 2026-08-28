@@ -214,6 +214,10 @@ app.get('/api/v1/scenes', async (req, res) => {
           .map(async (item) => {
             const id = item.Key.replace('scenes/', '').replace('.json', '');
             let name = id;
+            let collabRoomId = null;
+            let collabRoomKey = null;
+            let lastCollabAt = null;
+
             try {
               const head = await s3.send(
                 new HeadObjectCommand({
@@ -221,8 +225,19 @@ app.get('/api/v1/scenes', async (req, res) => {
                   Key: item.Key,
                 })
               );
-              if (head.Metadata && head.Metadata.boardname) {
-                name = decodeURIComponent(head.Metadata.boardname);
+              if (head.Metadata) {
+                if (head.Metadata.boardname) {
+                  name = decodeURIComponent(head.Metadata.boardname);
+                }
+                if (head.Metadata.collabroomid) {
+                  collabRoomId = head.Metadata.collabroomid;
+                }
+                if (head.Metadata.collabroomkey) {
+                  collabRoomKey = head.Metadata.collabroomkey;
+                }
+                if (head.Metadata.lastcollabat) {
+                  lastCollabAt = head.Metadata.lastcollabat;
+                }
               }
             } catch (e) {
               // fallback
@@ -232,6 +247,9 @@ app.get('/api/v1/scenes', async (req, res) => {
               name,
               lastModified: item.LastModified,
               size: item.Size,
+              collabRoomId,
+              collabRoomKey,
+              lastCollabAt,
             };
           })
       );
@@ -246,15 +264,25 @@ app.get('/api/v1/scenes', async (req, res) => {
           const filePath = path.join(LOCAL_SCENES_DIR, f);
           const stat = fs.statSync(filePath);
           let name = id;
+          let collabRoomId = null;
+          let collabRoomKey = null;
+          let lastCollabAt = null;
+
           try {
             const content = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
             if (content.name) name = content.name;
+            if (content.collabRoomId) collabRoomId = content.collabRoomId;
+            if (content.collabRoomKey) collabRoomKey = content.collabRoomKey;
+            if (content.lastCollabAt) lastCollabAt = content.lastCollabAt;
           } catch {}
           return {
             id,
             name,
             lastModified: stat.mtime,
             size: stat.size,
+            collabRoomId,
+            collabRoomKey,
+            lastCollabAt,
           };
         });
       return res.json({ success: true, scenes: items });
@@ -269,35 +297,112 @@ app.get('/api/v1/scenes', async (req, res) => {
 app.post('/api/v1/scenes/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const bodyData = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+    let parsed = {};
+    if (typeof req.body === 'object') {
+      parsed = req.body;
+    } else {
+      try {
+        parsed = JSON.parse(req.body);
+      } catch {}
+    }
 
-    let boardName = id;
-    try {
-      const parsed = typeof req.body === 'object' ? req.body : JSON.parse(req.body);
-      if (parsed.name) {
-        boardName = parsed.name;
-      }
-    } catch {}
+    const boardName = parsed.name || id;
+    const collabRoomId = parsed.collabRoomId || '';
+    const collabRoomKey = parsed.collabRoomKey || '';
+    const lastCollabAt = parsed.lastCollabAt || '';
+    const bodyData = JSON.stringify(parsed);
 
     if (isS3Configured) {
+      const metadata = {
+        boardname: encodeURIComponent(boardName),
+      };
+      if (collabRoomId) metadata.collabroomid = collabRoomId;
+      if (collabRoomKey) metadata.collabroomkey = collabRoomKey;
+      if (lastCollabAt) metadata.lastcollabat = lastCollabAt;
+
       await s3.send(
         new PutObjectCommand({
           Bucket: AWS_S3_BUCKET,
           Key: `scenes/${id}.json`,
           Body: bodyData,
           ContentType: 'application/json',
-          Metadata: {
-            boardname: encodeURIComponent(boardName),
-          },
+          Metadata: metadata,
         })
       );
     } else {
       fs.writeFileSync(path.join(LOCAL_SCENES_DIR, `${id}.json`), bodyData, 'utf-8');
     }
 
-    res.json({ success: true, id, name: boardName, message: 'Scene saved successfully' });
+    res.json({
+      success: true,
+      id,
+      name: boardName,
+      collabRoomId: collabRoomId || null,
+      collabRoomKey: collabRoomKey || null,
+      lastCollabAt: lastCollabAt || null,
+      message: 'Scene saved successfully',
+    });
   } catch (err) {
     console.error('Error saving scene:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 2.1 LINK LIVE COLLABORATION SESSION TO SCENE
+app.post('/api/v1/scenes/:id/collab', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { roomId, roomKey } = req.body || {};
+    const lastCollabAt = new Date().toISOString();
+
+    let existingScene = null;
+    if (isS3Configured) {
+      try {
+        const getRes = await s3.send(
+          new GetObjectCommand({
+            Bucket: AWS_S3_BUCKET,
+            Key: `scenes/${id}.json`,
+          })
+        );
+        const buf = await streamToBuffer(getRes.Body);
+        existingScene = JSON.parse(buf.toString('utf-8'));
+      } catch (e) {}
+    } else {
+      const filePath = path.join(LOCAL_SCENES_DIR, `${id}.json`);
+      if (fs.existsSync(filePath)) {
+        existingScene = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      }
+    }
+
+    if (existingScene) {
+      existingScene.collabRoomId = roomId;
+      existingScene.collabRoomKey = roomKey;
+      existingScene.lastCollabAt = lastCollabAt;
+      const bodyData = JSON.stringify(existingScene);
+
+      if (isS3Configured) {
+        await s3.send(
+          new PutObjectCommand({
+            Bucket: AWS_S3_BUCKET,
+            Key: `scenes/${id}.json`,
+            Body: bodyData,
+            ContentType: 'application/json',
+            Metadata: {
+              boardname: encodeURIComponent(existingScene.name || id),
+              collabroomid: roomId || '',
+              collabroomkey: roomKey || '',
+              lastcollabat: lastCollabAt,
+            },
+          })
+        );
+      } else {
+        fs.writeFileSync(path.join(LOCAL_SCENES_DIR, `${id}.json`), bodyData, 'utf-8');
+      }
+    }
+
+    res.json({ success: true, id, roomId, roomKey, lastCollabAt });
+  } catch (err) {
+    console.error('Error linking collab to scene:', err);
     res.status(500).json({ error: err.message });
   }
 });

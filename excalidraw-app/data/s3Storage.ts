@@ -4,12 +4,17 @@ import { serializeAsJSON } from "@excalidraw/excalidraw/data/json";
 
 const API_BASE = (import.meta.env.VITE_APP_BACKEND_URL || "").replace(/\/$/, "");
 
+import { atom } from "../app-jotai";
+
 export interface S3SceneMetadata {
   id: string;
   name: string;
   lastModified?: string | Date;
   size?: number;
   elementCount?: number;
+  collabRoomId?: string | null;
+  collabRoomKey?: string | null;
+  lastCollabAt?: string | null;
 }
 
 export interface S3SavedScene {
@@ -20,7 +25,43 @@ export interface S3SavedScene {
   appState: Partial<AppState>;
   files: BinaryFiles;
   updatedAt: string;
+  collabRoomId?: string | null;
+  collabRoomKey?: string | null;
+  lastCollabAt?: string | null;
 }
+
+export interface ActiveBoardInfo {
+  id: string | null;
+  name: string | null;
+  lastSavedAt: number | null;
+  isSaving: boolean;
+  collabRoomId?: string | null;
+  collabRoomKey?: string | null;
+  lastCollabAt?: string | null;
+}
+
+export const activeBoardAtom = atom<ActiveBoardInfo>({
+  id: null,
+  name: null,
+  lastSavedAt: null,
+  isSaving: false,
+});
+
+/**
+ * Generate full URL for a board (and optional live collaboration room)
+ */
+export const getBoardUrl = (
+  boardId: string,
+  collabData?: { roomId: string; roomKey: string } | null,
+): string => {
+  const origin = window.location.origin;
+  const pathname = window.location.pathname;
+  let url = `${origin}${pathname}?board=${encodeURIComponent(boardId)}`;
+  if (collabData?.roomId && collabData?.roomKey) {
+    url += `#room=${collabData.roomId},${collabData.roomKey}`;
+  }
+  return url;
+};
 
 /**
  * Check backend connection and storage mode
@@ -69,12 +110,18 @@ export const saveSceneToS3 = async ({
   elements,
   appState,
   files,
+  collabRoomId,
+  collabRoomKey,
+  lastCollabAt,
 }: {
   id?: string;
   name: string;
   elements: readonly ExcalidrawElement[];
   appState: Partial<AppState>;
   files: BinaryFiles;
+  collabRoomId?: string | null;
+  collabRoomKey?: string | null;
+  lastCollabAt?: string | null;
 }): Promise<{ id: string }> => {
   const cleanTitle = (name || "Untitled Board").trim();
   const slug = cleanTitle.toLowerCase().replace(/[^a-z0-9_-]/g, "_").replace(/^_+|_+$/g, "").substring(0, 32);
@@ -92,6 +139,9 @@ export const saveSceneToS3 = async ({
     },
     files,
     updatedAt: new Date().toISOString(),
+    collabRoomId: collabRoomId || null,
+    collabRoomKey: collabRoomKey || null,
+    lastCollabAt: lastCollabAt || null,
   };
 
   const res = await fetch(`${API_BASE}/api/v1/scenes/${sceneId}`, {
@@ -106,6 +156,27 @@ export const saveSceneToS3 = async ({
   }
 
   return { id: sceneId };
+};
+
+/**
+ * Record a live collaboration session against a saved board
+ */
+export const linkCollabToS3Scene = async (
+  boardId: string,
+  roomId: string,
+  roomKey: string,
+): Promise<{ lastCollabAt: string }> => {
+  const res = await fetch(`${API_BASE}/api/v1/scenes/${encodeURIComponent(boardId)}/collab`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ roomId, roomKey }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to link collab to scene: ${res.statusText}`);
+  }
+
+  return await res.json();
 };
 
 /**
