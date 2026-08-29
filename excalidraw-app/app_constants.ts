@@ -1,11 +1,11 @@
 // time constants (ms)
 export const SAVE_TO_LOCAL_STORAGE_TIMEOUT = 300;
-export const INITIAL_SCENE_UPDATE_TIMEOUT = 5000;
-export const FILE_UPLOAD_TIMEOUT = 300;
+export const INITIAL_SCENE_UPDATE_TIMEOUT = 1500;
+export const FILE_UPLOAD_TIMEOUT = 100;
 export const LOAD_IMAGES_TIMEOUT = 500;
-export const SYNC_FULL_SCENE_INTERVAL_MS = 20000;
+export const SYNC_FULL_SCENE_INTERVAL_MS = 1000; // Auto-save & full sync every 1 second
 export const SYNC_BROWSER_TABS_TIMEOUT = 50;
-export const CURSOR_SYNC_TIMEOUT = 33; // ~30fps
+export const CURSOR_SYNC_TIMEOUT = 16; // ~60fps smooth real-time cursor
 export const DELETED_ELEMENT_TIMEOUT = 24 * 60 * 60 * 1000; // 1 day
 
 // should be aligned with MAX_ALLOWED_FILE_BYTES

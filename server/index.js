@@ -37,6 +37,9 @@ const io = new Server(httpServer, {
     methods: ['GET', 'POST'],
   },
   maxHttpBufferSize: 50 * 1024 * 1024,
+  pingInterval: 10000,
+  pingTimeout: 5000,
+  transports: ['websocket', 'polling'],
 });
 
 io.on('connection', (socket) => {
@@ -46,10 +49,18 @@ io.on('connection', (socket) => {
     socket.join(roomId);
     socket.data.roomId = roomId;
 
-    socket.to(roomId).emit('new-user', socket.id);
-
     const socketsInRoom = await io.in(roomId).allSockets();
-    io.in(roomId).emit('room-user-change', Array.from(socketsInRoom));
+    const socketsList = Array.from(socketsInRoom);
+
+    if (socketsInRoom.size === 1) {
+      // First user in room: immediately notify client so scene is loaded from DB without 5s timeout delay
+      socket.emit('first-in-room');
+    } else {
+      // Existing room: tell other active users to broadcast SCENE_INIT to new user
+      socket.to(roomId).emit('new-user', socket.id);
+    }
+
+    io.in(roomId).emit('room-user-change', socketsList);
   });
 
   socket.on('server-broadcast', (roomId, encryptedData, iv) => {

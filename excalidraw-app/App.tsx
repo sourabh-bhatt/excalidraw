@@ -492,7 +492,7 @@ const ExcalidrawWrapper = () => {
           setActiveBoard((prev) => ({ ...prev, isSaving: false }));
         }
       },
-      1500,
+      1000, // 1-second continuous auto-save
     );
   }, [setActiveBoard]);
 
@@ -516,6 +516,42 @@ const ExcalidrawWrapper = () => {
       }
     }
   }, [isCollaborating, activeBoard.id, setActiveBoard]);
+
+  // 1-second periodic autosave ticker to guarantee cloud board is saved continuously
+  useEffect(() => {
+    if (!activeBoard.id || !excalidrawAPI) return;
+
+    const intervalId = window.setInterval(() => {
+      if (activeBoard.id && excalidrawAPI) {
+        const elements = excalidrawAPI.getSceneElements();
+        const appState = excalidrawAPI.getAppState();
+        const files = excalidrawAPI.getFiles();
+
+        debouncedSaveToS3(
+          activeBoard.id,
+          activeBoard.name || activeBoard.id,
+          elements,
+          appState,
+          files,
+          activeBoard.collabRoomId,
+          activeBoard.collabRoomKey,
+          activeBoard.lastCollabAt,
+        );
+      }
+    }, 1000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [
+    activeBoard.id,
+    activeBoard.name,
+    activeBoard.collabRoomId,
+    activeBoard.collabRoomKey,
+    activeBoard.lastCollabAt,
+    excalidrawAPI,
+    debouncedSaveToS3,
+  ]);
 
   const viewportStatusFrame = useMemo(
     () =>
@@ -760,11 +796,13 @@ const ExcalidrawWrapper = () => {
 
     const onUnload = () => {
       LocalData.flushSave();
+      debouncedSaveToS3.flush();
     };
 
     const visibilityChange = (event: FocusEvent | Event) => {
       if (event.type === EVENT.BLUR || document.hidden) {
         LocalData.flushSave();
+        debouncedSaveToS3.flush();
       }
       if (
         event.type === EVENT.VISIBILITY_CHANGE ||
@@ -790,11 +828,12 @@ const ExcalidrawWrapper = () => {
         false,
       );
     };
-  }, [isCollabDisabled, collabAPI, excalidrawAPI, setLangCode, loadImages]);
+  }, [isCollabDisabled, collabAPI, excalidrawAPI, setLangCode, loadImages, debouncedSaveToS3]);
 
   useEffect(() => {
     const unloadHandler = (event: BeforeUnloadEvent) => {
       LocalData.flushSave();
+      debouncedSaveToS3.flush();
 
       if (
         excalidrawAPI &&
@@ -815,7 +854,7 @@ const ExcalidrawWrapper = () => {
     return () => {
       window.removeEventListener(EVENT.BEFORE_UNLOAD, unloadHandler);
     };
-  }, [excalidrawAPI]);
+  }, [excalidrawAPI, debouncedSaveToS3]);
 
   const onChange = (
     elements: readonly OrderedExcalidrawElement[],
