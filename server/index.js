@@ -304,10 +304,19 @@ app.get('/api/v1/scenes', async (req, res) => {
   }
 });
 
+const recentlyDeletedScenes = new Map();
+
 // 2. SAVE OR UPDATE SCENE
 app.post('/api/v1/scenes/:id', async (req, res) => {
   try {
     const { id } = req.params;
+
+    const deletedTime = recentlyDeletedScenes.get(id);
+    if (deletedTime && Date.now() - deletedTime < 120000) {
+      // Scene was deleted within the last 2 minutes; ignore resurrection attempts from stale tabs
+      return res.json({ success: false, id, message: 'Scene was recently deleted' });
+    }
+
     let parsed = {};
     if (typeof req.body === 'object') {
       parsed = req.body;
@@ -363,6 +372,11 @@ app.post('/api/v1/scenes/:id', async (req, res) => {
 app.post('/api/v1/scenes/:id/collab', async (req, res) => {
   try {
     const { id } = req.params;
+    const deletedTime = recentlyDeletedScenes.get(id);
+    if (deletedTime && Date.now() - deletedTime < 120000) {
+      return res.json({ success: false, id, message: 'Scene was recently deleted' });
+    }
+
     const { roomId, roomKey } = req.body || {};
     const lastCollabAt = new Date().toISOString();
 
@@ -458,6 +472,7 @@ app.get('/api/v1/scenes/:id', async (req, res) => {
 app.delete('/api/v1/scenes/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    recentlyDeletedScenes.set(id, Date.now());
 
     if (isS3Configured) {
       await s3.send(

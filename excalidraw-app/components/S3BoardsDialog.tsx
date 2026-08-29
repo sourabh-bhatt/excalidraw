@@ -8,6 +8,7 @@ import {
   checkBackendHealth,
   getBoardUrl,
   linkCollabToS3Scene,
+  markBoardAsDeleted,
   activeBoardAtom,
   type S3SceneMetadata,
 } from "../data/s3Storage";
@@ -422,13 +423,20 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
     }
 
     try {
+      markBoardAsDeleted(id);
       await deleteS3Scene(id);
       setScenes((prev) => prev.filter((s) => s.id !== id));
       if (activeBoard.id === id) {
+        if (collabAPI?.isCollaborating()) {
+          collabAPI.stopCollaboration(false);
+        }
+        excalidrawAPI?.resetScene();
         setActiveBoard({ id: null, name: null, lastSavedAt: null, isSaving: false });
         window.history.pushState({}, "Excalidraw", window.location.origin + window.location.pathname);
+        document.title = "Excalidraw";
       }
       setMessage({ type: "success", text: `Deleted "${name || id}"` });
+      await refreshList();
     } catch (err: any) {
       setMessage({ type: "error", text: err.message || "Failed to delete board" });
     }

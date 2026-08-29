@@ -117,6 +117,18 @@ export const generateBoardSlugId = (name: string): string => {
   return slug ? `${slug}_${randSuffix}` : `board_${Date.now()}`;
 };
 
+const deletedBoardIds = new Set<string>();
+
+export const markBoardAsDeleted = (id: string) => {
+  if (id) {
+    deletedBoardIds.add(id);
+  }
+};
+
+export const isBoardDeleted = (id: string) => {
+  return id ? deletedBoardIds.has(id) : false;
+};
+
 /**
  * Save current drawing scene to S3
  */
@@ -141,6 +153,11 @@ export const saveSceneToS3 = async ({
 }): Promise<{ id: string }> => {
   const cleanTitle = (name || "Untitled Board").trim();
   const sceneId = id || generateBoardSlugId(cleanTitle);
+
+  if (sceneId && isBoardDeleted(sceneId)) {
+    console.warn(`[S3Storage] Aborting save for deleted board "${sceneId}"`);
+    return { id: sceneId };
+  }
   
   const payload: S3SavedScene = {
     id: sceneId,
@@ -159,7 +176,7 @@ export const saveSceneToS3 = async ({
     lastCollabAt: lastCollabAt || null,
   };
 
-  const res = await fetch(`${API_BASE}/api/v1/scenes/${sceneId}`, {
+  const res = await fetch(`${API_BASE}/api/v1/scenes/${encodeURIComponent(sceneId)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -198,7 +215,7 @@ export const linkCollabToS3Scene = async (
  * Load a scene by ID from S3
  */
 export const loadSceneFromS3 = async (id: string): Promise<S3SavedScene> => {
-  const res = await fetch(`${API_BASE}/api/v1/scenes/${id}`);
+  const res = await fetch(`${API_BASE}/api/v1/scenes/${encodeURIComponent(id)}`);
   if (!res.ok) {
     throw new Error(`Scene not found or failed to load: ${res.statusText}`);
   }
@@ -209,7 +226,8 @@ export const loadSceneFromS3 = async (id: string): Promise<S3SavedScene> => {
  * Delete a scene from S3
  */
 export const deleteS3Scene = async (id: string): Promise<void> => {
-  const res = await fetch(`${API_BASE}/api/v1/scenes/${id}`, {
+  markBoardAsDeleted(id);
+  const res = await fetch(`${API_BASE}/api/v1/scenes/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
   if (!res.ok) {
