@@ -102,6 +102,19 @@ export const listS3Scenes = async (): Promise<S3SceneMetadata[]> => {
 };
 
 /**
+ * Generate a clean, sensible slug-based ID from a board name
+ */
+export const generateBoardSlugId = (name: string): string => {
+  const cleanTitle = (name || "untitled").trim().toLowerCase();
+  const slug = cleanTitle
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .substring(0, 24);
+  const randSuffix = Date.now().toString().slice(-6);
+  return slug ? `${slug}_${randSuffix}` : `board_${Date.now()}`;
+};
+
+/**
  * Save current drawing scene to S3
  */
 export const saveSceneToS3 = async ({
@@ -124,8 +137,7 @@ export const saveSceneToS3 = async ({
   lastCollabAt?: string | null;
 }): Promise<{ id: string }> => {
   const cleanTitle = (name || "Untitled Board").trim();
-  const slug = cleanTitle.toLowerCase().replace(/[^a-z0-9_-]/g, "_").replace(/^_+|_+$/g, "").substring(0, 32);
-  const sceneId = id || (slug ? `${slug}_${Date.now().toString().slice(-4)}` : `board_${Date.now()}`);
+  const sceneId = id || generateBoardSlugId(cleanTitle);
   
   const payload: S3SavedScene = {
     id: sceneId,

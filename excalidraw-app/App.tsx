@@ -155,7 +155,7 @@ import { ExcalidrawPlusIframeExport } from "./ExcalidrawPlusIframeExport";
 
 import "./index.scss";
 
-import { ExcalidrawPlusPromoBanner } from "./components/ExcalidrawPlusPromoBanner";
+import { ActiveBoardHeader } from "./components/ActiveBoardHeader";
 import { AppSidebar } from "./components/AppSidebar";
 
 import type { CollabAPI } from "./collab/Collab";
@@ -458,6 +458,8 @@ const ExcalidrawWrapper = () => {
   const userToFollow = useAtomValue(userToFollowAtom);
   const [activeBoard, setActiveBoard] = useAtom(activeBoardAtom);
 
+  const lastSavedVersionRef = useRef<number>(-1);
+
   const debouncedSaveToS3 = useMemo(() => {
     return debounce(
       async (
@@ -482,6 +484,10 @@ const ExcalidrawWrapper = () => {
             collabRoomKey,
             lastCollabAt,
           });
+          lastSavedVersionRef.current = elements.reduce(
+            (acc, el) => acc + (el.version || 0),
+            0,
+          );
           setActiveBoard((prev) => ({
             ...prev,
             isSaving: false,
@@ -524,19 +530,26 @@ const ExcalidrawWrapper = () => {
     const intervalId = window.setInterval(() => {
       if (activeBoard.id && excalidrawAPI) {
         const elements = excalidrawAPI.getSceneElements();
-        const appState = excalidrawAPI.getAppState();
-        const files = excalidrawAPI.getFiles();
-
-        debouncedSaveToS3(
-          activeBoard.id,
-          activeBoard.name || activeBoard.id,
-          elements,
-          appState,
-          files,
-          activeBoard.collabRoomId,
-          activeBoard.collabRoomKey,
-          activeBoard.lastCollabAt,
+        const currentVersion = elements.reduce(
+          (acc, el) => acc + (el.version || 0),
+          0,
         );
+
+        if (currentVersion !== lastSavedVersionRef.current) {
+          const appState = excalidrawAPI.getAppState();
+          const files = excalidrawAPI.getFiles();
+
+          debouncedSaveToS3(
+            activeBoard.id,
+            activeBoard.name || activeBoard.id,
+            elements,
+            appState,
+            files,
+            activeBoard.collabRoomId,
+            activeBoard.collabRoomKey,
+            activeBoard.lastCollabAt,
+          );
+        }
       }
     }, 1000);
 
@@ -1157,8 +1170,8 @@ const ExcalidrawWrapper = () => {
           return (
             <div className="excalidraw-ui-top-right">
               {excalidrawAPI?.getEditorInterface().formFactor === "desktop" && (
-                <ExcalidrawPlusPromoBanner
-                  isSignedIn={isExcalidrawPlusSignedUser}
+                <ActiveBoardHeader
+                  onClick={() => setIsS3BoardsDialogOpen(true)}
                 />
               )}
 

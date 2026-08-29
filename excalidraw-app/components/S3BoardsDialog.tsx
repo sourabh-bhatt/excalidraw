@@ -7,10 +7,13 @@ import {
   deleteS3Scene,
   checkBackendHealth,
   getBoardUrl,
+  linkCollabToS3Scene,
   activeBoardAtom,
   type S3SceneMetadata,
 } from "../data/s3Storage";
-import { useAtom } from "../app-jotai";
+import { generateCollaborationLinkData } from "../data";
+import { collabAPIAtom } from "../collab/Collab";
+import { useAtom, useAtomValue } from "../app-jotai";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import "./S3BoardsDialog.scss";
 
@@ -26,6 +29,7 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
   onStartCollab,
 }) => {
   const [activeBoard, setActiveBoard] = useAtom(activeBoardAtom);
+  const collabAPI = useAtomValue(collabAPIAtom);
   const [boardName, setBoardName] = useState(activeBoard.name || "");
   const [scenes, setScenes] = useState<S3SceneMetadata[]>([]);
   const [loading, setLoading] = useState(false);
@@ -64,6 +68,31 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
     refreshList();
   }, []);
 
+  // Flush current board's modifications before switching to another board
+  const flushCurrentBoard = async () => {
+    if (activeBoard.id && excalidrawAPI) {
+      try {
+        const elements = excalidrawAPI.getSceneElements();
+        const appState = excalidrawAPI.getAppState();
+        const files = excalidrawAPI.getFiles();
+        if (elements.length > 0) {
+          await saveSceneToS3({
+            id: activeBoard.id,
+            name: activeBoard.name || activeBoard.id,
+            elements,
+            appState,
+            files,
+            collabRoomId: activeBoard.collabRoomId,
+            collabRoomKey: activeBoard.collabRoomKey,
+            lastCollabAt: activeBoard.lastCollabAt,
+          });
+        }
+      } catch (e) {
+        console.warn("Failed to flush current board before switch:", e);
+      }
+    }
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!excalidrawAPI) return;
@@ -98,10 +127,15 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
         lastCollabAt: activeBoard.lastCollabAt,
       });
 
-      const newUrl = getBoardUrl(result.id, activeBoard.collabRoomId && activeBoard.collabRoomKey ? {
-        roomId: activeBoard.collabRoomId,
-        roomKey: activeBoard.collabRoomKey,
-      } : null);
+      const newUrl = getBoardUrl(
+        result.id,
+        activeBoard.collabRoomId && activeBoard.collabRoomKey
+          ? {
+              roomId: activeBoard.collabRoomId,
+              roomKey: activeBoard.collabRoomKey,
+            }
+          : null,
+      );
       window.history.pushState({}, name, newUrl);
       document.title = `${name} - Excalidraw`;
 
@@ -120,6 +154,15 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
     setMessage(null);
 
     try {
+      // 1. Flush any pending edits from current active board
+      await flushCurrentBoard();
+
+      // 2. Disconnect previous collaboration session if active
+      if (collabAPI?.isCollaborating()) {
+        collabAPI.stopCollaboration(false);
+      }
+
+      // 3. Load target board scene from S3
       const sceneData = await loadSceneFromS3(scene.id);
       excalidrawAPI.updateScene({
         elements: sceneData.elements,
@@ -142,6 +185,8 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
         lastCollabAt: sceneData.lastCollabAt || scene.lastCollabAt,
       });
 
+      setBoardName(sceneData.name || scene.id);
+
       const newUrl = getBoardUrl(scene.id);
       window.history.pushState({}, sceneData.name || scene.id, newUrl);
       document.title = `${sceneData.name || scene.id} - Excalidraw`;
@@ -149,7 +194,7 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
       setMessage({ type: "success", text: `Loaded board "${sceneData.name || scene.id}"!` });
       setTimeout(() => {
         onClose();
-      }, 500);
+      }, 400);
     } catch (err: any) {
       setMessage({ type: "error", text: err.message || "Failed to load board" });
     } finally {
@@ -158,20 +203,104 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
   };
 
   const handleJoinLive = async (scene: S3SceneMetadata) => {
-    if (!scene.collabRoomId || !scene.collabRoomKey) {
-      // If no room exists yet, open board and start collab
-      await handleLoad(scene);
-      onClose();
-      onStartCollab?.();
-      return;
-    }
+    if (!excalidrawAPI) return;
+    setLoading(true);
 
-    const liveUrl = getBoardUrl(scene.id, {
-      roomId: scene.collabRoomId,
-      roomKey: scene.collabRoomKey,
-    });
-    window.location.href = liveUrl;
-    window.location.reload();
+    try {
+      // 1. Flush current board
+      await flushCurrentBoard();
+
+      // 2. Disconnect previous collaboration session
+      if (collabAPI?.isCollaborating()) {
+        collabAPI.stopCollaboration(false);
+      }
+
+      // 3. Load target board into canvas
+      const sceneData = await loadSceneFromS3(scene.id);
+      excalidrawAPI.updateScene({
+        elements: sceneData.elements,
+        appState: {
+          viewBackgroundColor: sceneData.appState?.viewBackgroundColor || "#ffffff",
+        },
+      });
+
+      if (sceneData.files) {
+        excalidrawAPI.addFiles(Object.values(sceneData.files));
+      }
+
+      const roomId = scene.collabRoomId || sceneData.collabRoomId;
+      const roomKey = scene.collabRoomKey || sceneData.collabRoomKey;
+
+      if (!roomId || !roomKey) {
+        // Start new live room for this board if missing
+        await handleStartLive(scene);
+        return;
+      }
+
+      setActiveBoard({
+        id: scene.id,
+        name: sceneData.name || scene.id,
+        lastSavedAt: Date.now(),
+        isSaving: false,
+        collabRoomId: roomId,
+        collabRoomKey: roomKey,
+        lastCollabAt: new Date().toISOString(),
+      });
+
+      // 4. Start collaboration in this board's dedicated room
+      onClose();
+      await collabAPI?.startCollaboration({ roomId, roomKey });
+    } catch (err: any) {
+      setMessage({ type: "error", text: err.message || "Failed to join live session" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleStartLive = async (scene: S3SceneMetadata) => {
+    if (!excalidrawAPI) return;
+    setLoading(true);
+
+    try {
+      await flushCurrentBoard();
+
+      if (collabAPI?.isCollaborating()) {
+        collabAPI.stopCollaboration(false);
+      }
+
+      const sceneData = await loadSceneFromS3(scene.id);
+      excalidrawAPI.updateScene({
+        elements: sceneData.elements,
+        appState: {
+          viewBackgroundColor: sceneData.appState?.viewBackgroundColor || "#ffffff",
+        },
+      });
+
+      if (sceneData.files) {
+        excalidrawAPI.addFiles(Object.values(sceneData.files));
+      }
+
+      // Generate a new unique room for this board
+      const { roomId, roomKey } = await generateCollaborationLinkData();
+      const res = await linkCollabToS3Scene(scene.id, roomId, roomKey);
+
+      setActiveBoard({
+        id: scene.id,
+        name: sceneData.name || scene.id,
+        lastSavedAt: Date.now(),
+        isSaving: false,
+        collabRoomId: roomId,
+        collabRoomKey: roomKey,
+        lastCollabAt: res.lastCollabAt || new Date().toISOString(),
+      });
+
+      onClose();
+      await collabAPI?.startCollaboration({ roomId, roomKey });
+    } catch (err: any) {
+      setMessage({ type: "error", text: err.message || "Failed to start live session" });
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleCopyBoardUrl = (scene: S3SceneMetadata, e: React.MouseEvent) => {
@@ -192,29 +321,34 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
     setMessage({ type: "info", text: `🔗 Live Collab link copied: ${url}` });
   };
 
-  const handleNewBoard = () => {
+  const handleNewBoard = async () => {
     if (!excalidrawAPI) return;
-    if (
-      excalidrawAPI.getSceneElements().length > 0 &&
-      !window.confirm("Start a new blank board? Unsaved local changes will be cleared.")
-    ) {
-      return;
+
+    // 1. Flush any current board changes
+    await flushCurrentBoard();
+
+    // 2. Disconnect previous collab
+    if (collabAPI?.isCollaborating()) {
+      collabAPI.stopCollaboration(false);
     }
 
-    const newId = `board_${Date.now()}`;
+    // 3. Reset canvas cleanly
     excalidrawAPI.resetScene();
+
     setActiveBoard({
-      id: newId,
-      name: "Untitled Board",
+      id: null,
+      name: null,
       lastSavedAt: null,
       isSaving: false,
     });
 
-    const newUrl = getBoardUrl(newId);
-    window.history.pushState({}, "Untitled Board", newUrl);
-    document.title = `Untitled Board - Excalidraw`;
-    setBoardName("Untitled Board");
-    setMessage({ type: "info", text: "Created new blank board! Type a name and save to S3." });
+    window.history.pushState({}, "Excalidraw", window.location.origin + window.location.pathname);
+    document.title = `Excalidraw`;
+    setBoardName("");
+    setMessage({ type: "info", text: "Created new blank canvas! Type a title and save to S3." });
+    setTimeout(() => {
+      onClose();
+    }, 400);
   };
 
   const handleDelete = async (id: string, name: string, e: React.MouseEvent) => {
@@ -383,13 +517,23 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
                     </div>
 
                     <div className="s3-card-actions">
-                      {hasCollab && scene.collabRoomId && (
+                      {hasCollab && scene.collabRoomId ? (
                         <button
                           className="s3-btn s3-btn-collab"
                           onClick={() => handleJoinLive(scene)}
-                          title="Join Live Collaboration Session"
+                          disabled={loading}
+                          title="Join Live Collaboration Session for this board"
                         >
                           ⚡ Join Live
+                        </button>
+                      ) : (
+                        <button
+                          className="s3-btn s3-btn-collab"
+                          onClick={() => handleStartLive(scene)}
+                          disabled={loading}
+                          title="Create and start a Live Collaboration Session for this board"
+                        >
+                          🌐 Start Live
                         </button>
                       )}
 
