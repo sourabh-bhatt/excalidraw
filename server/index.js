@@ -496,7 +496,7 @@ app.delete('/api/v1/scenes/:id', async (req, res) => {
 });
 
 // 5. UPLOAD BINARY FILE / IMAGE
-app.post('/api/v1/files/:id', async (req, res) => {
+app.post('/api/v1/files/:id', express.raw({ type: '*/*', limit: '100mb' }), async (req, res) => {
   try {
     const { id } = req.params;
     const contentType = req.headers['content-type'] || 'application/octet-stream';

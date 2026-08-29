@@ -660,7 +660,15 @@ const ExcalidrawWrapper = () => {
             return acc;
           }, [] as FileId[]) || [];
 
-        if (data.isExternalScene) {
+        if (data.scene?.files) {
+          const filesArray = Object.values(data.scene.files);
+          if (filesArray.length) {
+            excalidrawAPI.addFiles(filesArray);
+            FileStatusStore.updateStatuses(
+              filesArray.map((f: any) => [f.id, "loaded"] as [FileId, "loaded"]),
+            );
+          }
+        } else if (data.isExternalScene && data.key) {
           if (fileIds.length) {
             // Direct Firebase call (not through FileManager), so track manually
             FileStatusStore.updateStatuses(

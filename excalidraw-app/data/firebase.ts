@@ -226,23 +226,47 @@ export const loadFilesFromFirebase = async (
         const response = await fetch(url);
         if (response.status < 400) {
           const arrayBuffer = await response.arrayBuffer();
+          let dataURL: DataURL | null = null;
+          let mimeType: any = MIME_TYPES.binary;
 
-          const { data, metadata } = await decompressData<BinaryFileMetadata>(
-            new Uint8Array(arrayBuffer),
-            {
-              decryptionKey,
-            },
-          );
+          if (decryptionKey) {
+            try {
+              const { data, metadata } = await decompressData<BinaryFileMetadata>(
+                new Uint8Array(arrayBuffer),
+                {
+                  decryptionKey,
+                },
+              );
 
-          const dataURL = new TextDecoder().decode(data) as DataURL;
+              dataURL = new TextDecoder().decode(data) as DataURL;
+              mimeType = metadata.mimeType || MIME_TYPES.binary;
+            } catch (decompErr) {
+              // May be uncompressed raw dataURL uploaded directly
+            }
+          }
 
-          loadedFiles.push({
-            mimeType: metadata.mimeType || MIME_TYPES.binary,
-            id,
-            dataURL,
-            created: metadata?.created || Date.now(),
-            lastRetrieved: metadata?.created || Date.now(),
-          });
+          if (!dataURL) {
+            const text = new TextDecoder().decode(new Uint8Array(arrayBuffer));
+            if (text.startsWith("data:")) {
+              dataURL = text as DataURL;
+              const match = text.match(/^data:([^;]+);/);
+              if (match) {
+                mimeType = match[1] as any;
+              }
+            }
+          }
+
+          if (dataURL) {
+            loadedFiles.push({
+              mimeType: (mimeType || MIME_TYPES.binary) as any,
+              id,
+              dataURL,
+              created: Date.now(),
+              lastRetrieved: Date.now(),
+            });
+          } else {
+            erroredFiles.set(id, true);
+          }
         } else {
           erroredFiles.set(id, true);
         }
