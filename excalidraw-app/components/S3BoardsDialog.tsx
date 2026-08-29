@@ -324,31 +324,95 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
   const handleNewBoard = async () => {
     if (!excalidrawAPI) return;
 
-    // 1. Flush any current board changes
-    await flushCurrentBoard();
+    const inputName = window.prompt(
+      "Enter a name for your new cloud board:",
+      "New Board",
+    );
+    if (inputName === null) return; // User cancelled
 
-    // 2. Disconnect previous collab
-    if (collabAPI?.isCollaborating()) {
-      collabAPI.stopCollaboration(false);
+    const cleanName = inputName.trim() || `Board ${new Date().toLocaleDateString()}`;
+    setLoading(true);
+
+    try {
+      // 1. Flush any current board changes
+      await flushCurrentBoard();
+
+      // 2. Disconnect previous collab
+      if (collabAPI?.isCollaborating()) {
+        collabAPI.stopCollaboration(false);
+      }
+
+      // 3. Reset canvas cleanly
+      excalidrawAPI.resetScene();
+
+      // 4. Create new board in S3 immediately with this title
+      const res = await saveSceneToS3({
+        name: cleanName,
+        elements: [],
+        appState: { viewBackgroundColor: "#ffffff" },
+        files: {},
+      });
+
+      setActiveBoard({
+        id: res.id,
+        name: cleanName,
+        lastSavedAt: Date.now(),
+        isSaving: false,
+        collabRoomId: null,
+        collabRoomKey: null,
+        lastCollabAt: null,
+      });
+
+      const newUrl = getBoardUrl(res.id);
+      window.history.pushState({}, cleanName, newUrl);
+      document.title = `${cleanName} - Excalidraw`;
+      setBoardName(cleanName);
+
+      setMessage({
+        type: "success",
+        text: `Created new board "${cleanName}"! Ready to draw.`,
+      });
+      await refreshList();
+      setTimeout(() => {
+        onClose();
+      }, 300);
+    } catch (err: any) {
+      setMessage({ type: "error", text: err.message || "Failed to create new board" });
+    } finally {
+      setLoading(false);
     }
+  };
 
-    // 3. Reset canvas cleanly
-    excalidrawAPI.resetScene();
+  const handleNewBoardInNewTab = async () => {
+    const inputName = window.prompt(
+      "Enter a name for your new cloud board:",
+      "New Board",
+    );
+    if (inputName === null) return;
 
-    setActiveBoard({
-      id: null,
-      name: null,
-      lastSavedAt: null,
-      isSaving: false,
-    });
+    const cleanName = inputName.trim() || `Board ${new Date().toLocaleDateString()}`;
+    setLoading(true);
 
-    window.history.pushState({}, "Excalidraw", window.location.origin + window.location.pathname);
-    document.title = `Excalidraw`;
-    setBoardName("");
-    setMessage({ type: "info", text: "Created new blank canvas! Type a title and save to S3." });
-    setTimeout(() => {
-      onClose();
-    }, 400);
+    try {
+      const res = await saveSceneToS3({
+        name: cleanName,
+        elements: [],
+        appState: { viewBackgroundColor: "#ffffff" },
+        files: {},
+      });
+
+      const newUrl = getBoardUrl(res.id);
+      window.open(newUrl, "_blank");
+      await refreshList();
+      setMessage({
+        type: "success",
+        text: `Opened new board "${cleanName}" in a new tab!`,
+      });
+    } catch (err: any) {
+      setMessage({ type: "error", text: err.message || "Failed to create board" });
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleDelete = async (id: string, name: string, e: React.MouseEvent) => {
@@ -399,8 +463,11 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
             </span>
           </div>
           <div className="s3-header-actions">
-            <button className="s3-btn-small" onClick={handleNewBoard} title="Start new board">
+            <button className="s3-btn-small" onClick={handleNewBoard} title="Create and open new board in current tab">
               ➕ New Board
+            </button>
+            <button className="s3-btn-small" onClick={handleNewBoardInNewTab} title="Create and open new board in a new browser tab">
+              ↗️ In New Tab
             </button>
             <button className="s3-refresh-btn" onClick={refreshList} disabled={loading}>
               🔄 Refresh

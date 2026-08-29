@@ -51,12 +51,15 @@ export const activeBoardAtom = atom<ActiveBoardInfo>({
  * Generate full URL for a board (and optional live collaboration room)
  */
 export const getBoardUrl = (
-  boardId: string,
+  boardId?: string | null,
   collabData?: { roomId: string; roomKey: string } | null,
 ): string => {
   const origin = window.location.origin;
   const pathname = window.location.pathname;
-  let url = `${origin}${pathname}?board=${encodeURIComponent(boardId)}`;
+  let url = `${origin}${pathname}`;
+  if (boardId) {
+    url += `?board=${encodeURIComponent(boardId)}`;
+  }
   if (collabData?.roomId && collabData?.roomKey) {
     url += `#room=${collabData.roomId},${collabData.roomKey}`;
   }

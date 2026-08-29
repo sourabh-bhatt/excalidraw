@@ -87,8 +87,8 @@ import {
   saveUsernameToLocalStorage,
 } from "../data/localStorage";
 import { resetBrowserStateVersions } from "../data/tabSync";
-
 import { collabErrorIndicatorAtom } from "./CollabError";
+import { activeBoardAtom, getBoardUrl } from "../data/s3Storage";
 import Portal from "./Portal";
 
 import type {
@@ -499,12 +499,14 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       ({ roomId, roomKey } = existingRoomLinkData);
     } else {
       ({ roomId, roomKey } = await generateCollaborationLinkData());
-      window.history.pushState(
-        {},
-        APP_NAME,
-        getCollaborationLink({ roomId, roomKey }),
-      );
     }
+
+    const currentBoardId = appJotaiStore.get(activeBoardAtom).id;
+    const fullCollabUrl = getBoardUrl(currentBoardId || undefined, {
+      roomId,
+      roomKey,
+    });
+    window.history.pushState({}, document.title, fullCollabUrl);
 
     // TODO: `ImportedDataState` type here seems abused
     const scenePromise = resolvablePromise<
@@ -545,20 +547,14 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       return null;
     }
 
-    if (existingRoomLinkData) {
-      // when joining existing room, don't merge it with current scene data
-      this.excalidrawAPI.resetScene();
-    } else {
-      const elements = this.excalidrawAPI.getSceneElements().map((element) => {
-        if (isImageElement(element) && element.status === "saved") {
-          return newElementWith(element, { status: "pending" });
-        }
-        return element;
-      });
-      // remove deleted elements from elements array to ensure we don't
-      // expose potentially sensitive user data in case user manually deletes
-      // existing elements (or clears scene), which would otherwise be persisted
-      // to database even if deleted before creating the room.
+    const elements = this.excalidrawAPI.getSceneElements().map((element) => {
+      if (isImageElement(element) && element.status === "saved") {
+        return newElementWith(element, { status: "pending" });
+      }
+      return element;
+    });
+
+    if (elements.length > 0) {
       this.excalidrawAPI.updateScene({
         elements,
         captureUpdate: CaptureUpdateAction.NEVER,
@@ -728,15 +724,13 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       );
     }
     if (fetchScene && roomLinkData && this.portal.socket) {
-      this.excalidrawAPI.resetScene();
-
       try {
         const elements = await loadFromFirebase(
           roomLinkData.roomId,
           roomLinkData.roomKey,
           this.portal.socket,
         );
-        if (elements) {
+        if (elements && elements.length > 0) {
           this.setLastBroadcastedOrReceivedSceneVersion(
             getSceneVersion(elements),
           );
@@ -745,6 +739,12 @@ class Collab extends PureComponent<CollabProps, CollabState> {
             elements,
             scrollToContent: true,
           };
+        } else {
+          // If room has no elements yet but local canvas does, seed room
+          const currentElements = this.excalidrawAPI.getSceneElements();
+          if (currentElements.length > 0) {
+            this.saveCollabRoomToFirebase(getSyncableElements(currentElements));
+          }
         }
       } catch (error: any) {
         // log the error and move on. other peers will sync us the scene.
