@@ -267,20 +267,23 @@ const initializeScene = async (opts: {
       !scene.elements.length ||
       // don't prompt for collab scenes because we don't override local storage
       roomLinkData ||
+      // don't prompt for cloud boards (direct board link)
+      boardId ||
       // otherwise, prompt whether user wants to override current scene
       (await openConfirmModal(shareableLinkConfirmDialog))
     ) {
       if (boardId) {
         try {
           const imported = await loadSceneFromS3(boardId);
+          const restored = bumpElementVersions(
+            restoreElements(imported.elements, null, {
+              repairBindings: true,
+              deleteInvisibleElements: true,
+            }),
+            localDataState?.elements,
+          );
           scene = {
-            elements: bumpElementVersions(
-              restoreElements(imported.elements, null, {
-                repairBindings: true,
-                deleteInvisibleElements: true,
-              }),
-              localDataState?.elements,
-            ),
+            elements: restored,
             appState: restoreAppState(
               imported.appState,
               localDataState?.appState,
@@ -288,6 +291,15 @@ const initializeScene = async (opts: {
           };
           if (imported.files) {
             opts.excalidrawAPI.addFiles(Object.values(imported.files));
+          }
+          if (restored.length > 0) {
+            setTimeout(() => {
+              opts.excalidrawAPI.setViewport({
+                target: restored,
+                fit: "scale-down",
+                animation: false,
+              });
+            }, 100);
           }
           appJotaiStore.set(activeBoardAtom, {
             id: boardId,

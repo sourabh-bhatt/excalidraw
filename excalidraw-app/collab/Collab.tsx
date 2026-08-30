@@ -526,6 +526,19 @@ class Collab extends PureComponent<CollabProps, CollabState> {
         roomLinkData: existingRoomLinkData,
         fetchScene: true,
       }).then((scene) => {
+        if (scene?.elements) {
+          const reconciledElements = this._reconcileElements(
+            toBrandedType<readonly RemoteExcalidrawElement[]>(scene.elements),
+          );
+          this.handleRemoteSceneUpdate(reconciledElements);
+          if (scene.scrollToContent) {
+            this.excalidrawAPI.setViewport({
+              target: reconciledElements,
+              fit: "scale-down",
+              animation: false,
+            });
+          }
+        }
         scenePromise.resolve(scene);
       });
     };
@@ -596,6 +609,13 @@ class Collab extends PureComponent<CollabProps, CollabState> {
               const reconciledElements =
                 this._reconcileElements(remoteElements);
               this.handleRemoteSceneUpdate(reconciledElements);
+              if (reconciledElements.length > 0) {
+                this.excalidrawAPI.setViewport({
+                  target: reconciledElements,
+                  fit: "scale-down",
+                  animation: false,
+                });
+              }
               // noop if already resolved via init from firebase
               scenePromise.resolve({
                 elements: reconciledElements,
@@ -688,6 +708,19 @@ class Collab extends PureComponent<CollabProps, CollabState> {
         fetchScene: true,
         roomLinkData: existingRoomLinkData,
       });
+      if (sceneData?.elements) {
+        const reconciledElements = this._reconcileElements(
+          toBrandedType<readonly RemoteExcalidrawElement[]>(sceneData.elements),
+        );
+        this.handleRemoteSceneUpdate(reconciledElements);
+        if (sceneData.scrollToContent) {
+          this.excalidrawAPI.setViewport({
+            target: reconciledElements,
+            fit: "scale-down",
+            animation: false,
+          });
+        }
+      }
       scenePromise.resolve(sceneData);
     });
 

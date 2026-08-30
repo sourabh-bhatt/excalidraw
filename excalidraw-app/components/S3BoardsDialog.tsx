@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Dialog } from "@excalidraw/excalidraw/components/Dialog";
+import { restoreElements, restoreAppState } from "@excalidraw/excalidraw/data/restore";
+import { CaptureUpdateAction } from "@excalidraw/excalidraw";
 import {
   listS3Scenes,
   saveSceneToS3,
@@ -69,15 +71,15 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
     refreshList();
   }, []);
 
-  // Flush current board's modifications before switching to another board
-  const flushCurrentBoard = async () => {
+  // Flush current board's modifications in the background before switching
+  const flushCurrentBoard = () => {
     if (activeBoard.id && excalidrawAPI) {
       try {
         const elements = excalidrawAPI.getSceneElements();
         const appState = excalidrawAPI.getAppState();
         const files = excalidrawAPI.getFiles();
         if (elements.length > 0) {
-          await saveSceneToS3({
+          saveSceneToS3({
             id: activeBoard.id,
             name: activeBoard.name || activeBoard.id,
             elements,
@@ -86,6 +88,8 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
             collabRoomId: activeBoard.collabRoomId,
             collabRoomKey: activeBoard.collabRoomKey,
             lastCollabAt: activeBoard.lastCollabAt,
+          }).catch((e) => {
+            console.warn("[S3Storage] Background flush note:", e);
           });
         }
       } catch (e) {
@@ -155,8 +159,8 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
     setMessage(null);
 
     try {
-      // 1. Flush any pending edits from current active board
-      await flushCurrentBoard();
+      // 1. Flush any pending edits from current active board in background
+      flushCurrentBoard();
 
       // 2. Disconnect previous collaboration session if active
       if (collabAPI?.isCollaborating()) {
@@ -165,15 +169,30 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
 
       // 3. Load target board scene from S3
       const sceneData = await loadSceneFromS3(scene.id);
+      const restoredElements = restoreElements(sceneData.elements || [], null, {
+        repairBindings: true,
+        deleteInvisibleElements: true,
+      });
+
       excalidrawAPI.updateScene({
-        elements: sceneData.elements,
-        appState: {
-          viewBackgroundColor: sceneData.appState?.viewBackgroundColor || "#ffffff",
-        },
+        elements: restoredElements,
+        appState: restoreAppState(sceneData.appState, null),
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
       });
 
       if (sceneData.files) {
         excalidrawAPI.addFiles(Object.values(sceneData.files));
+      }
+
+      // Center and fit canvas viewport to the loaded content
+      if (restoredElements.length > 0) {
+        setTimeout(() => {
+          excalidrawAPI.setViewport({
+            target: restoredElements,
+            fit: "scale-down",
+            animation: false,
+          });
+        }, 50);
       }
 
       setActiveBoard({
@@ -195,7 +214,7 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
       setMessage({ type: "success", text: `Loaded board "${sceneData.name || scene.id}"!` });
       setTimeout(() => {
         onClose();
-      }, 400);
+      }, 250);
     } catch (err: any) {
       setMessage({ type: "error", text: err.message || "Failed to load board" });
     } finally {
@@ -206,10 +225,11 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
   const handleJoinLive = async (scene: S3SceneMetadata) => {
     if (!excalidrawAPI) return;
     setLoading(true);
+    setMessage(null);
 
     try {
-      // 1. Flush current board
-      await flushCurrentBoard();
+      // 1. Flush current board in background
+      flushCurrentBoard();
 
       // 2. Disconnect previous collaboration session
       if (collabAPI?.isCollaborating()) {
@@ -218,15 +238,29 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
 
       // 3. Load target board into canvas
       const sceneData = await loadSceneFromS3(scene.id);
+      const restoredElements = restoreElements(sceneData.elements || [], null, {
+        repairBindings: true,
+        deleteInvisibleElements: true,
+      });
+
       excalidrawAPI.updateScene({
-        elements: sceneData.elements,
-        appState: {
-          viewBackgroundColor: sceneData.appState?.viewBackgroundColor || "#ffffff",
-        },
+        elements: restoredElements,
+        appState: restoreAppState(sceneData.appState, null),
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
       });
 
       if (sceneData.files) {
         excalidrawAPI.addFiles(Object.values(sceneData.files));
+      }
+
+      if (restoredElements.length > 0) {
+        setTimeout(() => {
+          excalidrawAPI.setViewport({
+            target: restoredElements,
+            fit: "scale-down",
+            animation: false,
+          });
+        }, 50);
       }
 
       const roomId = scene.collabRoomId || sceneData.collabRoomId;
@@ -248,7 +282,9 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
         lastCollabAt: new Date().toISOString(),
       });
 
-      // 4. Start collaboration in this board's dedicated room
+      setBoardName(sceneData.name || scene.id);
+
+      // Close modal and start collaboration in this board's dedicated room
       onClose();
       await collabAPI?.startCollaboration({ roomId, roomKey });
     } catch (err: any) {
@@ -261,24 +297,39 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
   const handleStartLive = async (scene: S3SceneMetadata) => {
     if (!excalidrawAPI) return;
     setLoading(true);
+    setMessage(null);
 
     try {
-      await flushCurrentBoard();
+      flushCurrentBoard();
 
       if (collabAPI?.isCollaborating()) {
         collabAPI.stopCollaboration(false);
       }
 
       const sceneData = await loadSceneFromS3(scene.id);
+      const restoredElements = restoreElements(sceneData.elements || [], null, {
+        repairBindings: true,
+        deleteInvisibleElements: true,
+      });
+
       excalidrawAPI.updateScene({
-        elements: sceneData.elements,
-        appState: {
-          viewBackgroundColor: sceneData.appState?.viewBackgroundColor || "#ffffff",
-        },
+        elements: restoredElements,
+        appState: restoreAppState(sceneData.appState, null),
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
       });
 
       if (sceneData.files) {
         excalidrawAPI.addFiles(Object.values(sceneData.files));
+      }
+
+      if (restoredElements.length > 0) {
+        setTimeout(() => {
+          excalidrawAPI.setViewport({
+            target: restoredElements,
+            fit: "scale-down",
+            animation: false,
+          });
+        }, 50);
       }
 
       // Generate a new unique room for this board
@@ -294,6 +345,8 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
         collabRoomKey: roomKey,
         lastCollabAt: res.lastCollabAt || new Date().toISOString(),
       });
+
+      setBoardName(sceneData.name || scene.id);
 
       onClose();
       await collabAPI?.startCollaboration({ roomId, roomKey });
@@ -336,7 +389,7 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
 
     try {
       // 1. Flush any current board changes
-      await flushCurrentBoard();
+      flushCurrentBoard();
 
       // 2. Disconnect previous collab
       if (collabAPI?.isCollaborating()) {

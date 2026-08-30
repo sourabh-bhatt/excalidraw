@@ -208,6 +208,9 @@ app.get('/health', (req, res) => {
   });
 });
 
+// In-memory cache for S3 scene metadata to eliminate slow N+1 HeadObject queries
+const sceneMetadataCache = new Map();
+
 // 1. LIST SAVED SCENES
 app.get('/api/v1/scenes', async (req, res) => {
   try {
@@ -224,6 +227,21 @@ app.get('/api/v1/scenes', async (req, res) => {
           .filter((item) => item.Key.endsWith('.json'))
           .map(async (item) => {
             const id = item.Key.replace('scenes/', '').replace('.json', '');
+            const cacheKey = `${item.Key}:${item.ETag || item.LastModified}`;
+            
+            const cached = sceneMetadataCache.get(cacheKey);
+            if (cached) {
+              return {
+                id,
+                name: cached.name || id,
+                lastModified: item.LastModified,
+                size: item.Size,
+                collabRoomId: cached.collabRoomId,
+                collabRoomKey: cached.collabRoomKey,
+                lastCollabAt: cached.lastCollabAt,
+              };
+            }
+
             let name = id;
             let collabRoomId = null;
             let collabRoomKey = null;
@@ -250,6 +268,7 @@ app.get('/api/v1/scenes', async (req, res) => {
                   lastCollabAt = head.Metadata.lastcollabat;
                 }
               }
+              sceneMetadataCache.set(cacheKey, { name, collabRoomId, collabRoomKey, lastCollabAt });
             } catch (e) {
               // fallback
             }

@@ -130,6 +130,41 @@ export const isBoardDeleted = (id: string) => {
 };
 
 /**
+ * Upload binary image file to S3
+ */
+export const uploadFileToS3 = async (
+  fileId: FileId,
+  fileData: BinaryFileData,
+): Promise<void> => {
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/files/${fileId}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": fileData.mimeType || "application/octet-stream",
+      },
+      body: fileData.dataURL,
+    });
+
+    if (!res.ok) {
+      console.warn(`[S3Storage] Failed to upload file ${fileId} to S3: ${res.statusText}`);
+    }
+  } catch (err) {
+    console.warn(`[S3Storage] Error uploading file ${fileId}:`, err);
+  }
+};
+
+/**
+ * Get binary image file from S3
+ */
+export const getFileFromS3 = async (fileId: FileId): Promise<string> => {
+  const res = await fetch(`${API_BASE}/api/v1/files/${fileId}`);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch file from S3: ${res.statusText}`);
+  }
+  return await res.text();
+};
+
+/**
  * Save current drawing scene to S3
  */
 export const saveSceneToS3 = async ({
@@ -158,6 +193,39 @@ export const saveSceneToS3 = async ({
     console.warn(`[S3Storage] Aborting save for deleted board "${sceneId}"`);
     return { id: sceneId };
   }
+
+  // Upload heavy binary files to dedicated file storage in parallel
+  const sanitizedFiles: BinaryFiles = {};
+  const fileUploadPromises: Promise<void>[] = [];
+
+  if (files && typeof files === "object") {
+    for (const [fileId, fileData] of Object.entries(files)) {
+      if (fileData) {
+        if (fileData.dataURL && fileData.dataURL.length > 32 * 1024) {
+          // Large image (>32KB): upload to /api/v1/files/:id
+          fileUploadPromises.push(uploadFileToS3(fileId as FileId, fileData));
+          sanitizedFiles[fileId as FileId] = {
+            id: fileData.id,
+            mimeType: fileData.mimeType,
+            created: fileData.created,
+            lastRetrieved: fileData.lastRetrieved,
+            version: fileData.version,
+            // Keep dataURL in scene for offline/fallback but avoid multi-megabyte duplicates
+            dataURL: fileData.dataURL,
+          };
+        } else {
+          sanitizedFiles[fileId as FileId] = fileData;
+        }
+      }
+    }
+  }
+
+  // Do not block scene save on file uploads
+  if (fileUploadPromises.length > 0) {
+    Promise.all(fileUploadPromises).catch((err) => {
+      console.warn("[S3Storage] Background file upload warning:", err);
+    });
+  }
   
   const payload: S3SavedScene = {
     id: sceneId,
@@ -169,7 +237,7 @@ export const saveSceneToS3 = async ({
       gridSize: appState.gridSize,
       gridStep: appState.gridStep,
     },
-    files,
+    files: sanitizedFiles,
     updatedAt: new Date().toISOString(),
     collabRoomId: collabRoomId || null,
     collabRoomKey: collabRoomKey || null,
@@ -233,35 +301,4 @@ export const deleteS3Scene = async (id: string): Promise<void> => {
   if (!res.ok) {
     throw new Error(`Failed to delete scene: ${res.statusText}`);
   }
-};
-
-/**
- * Upload binary image file to S3
- */
-export const uploadFileToS3 = async (
-  fileId: FileId,
-  fileData: BinaryFileData,
-): Promise<void> => {
-  const res = await fetch(`${API_BASE}/api/v1/files/${fileId}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": fileData.mimeType || "application/octet-stream",
-    },
-    body: fileData.dataURL,
-  });
-
-  if (!res.ok) {
-    throw new Error(`Failed to upload file to S3: ${res.statusText}`);
-  }
-};
-
-/**
- * Get binary image file from S3
- */
-export const getFileFromS3 = async (fileId: FileId): Promise<string> => {
-  const res = await fetch(`${API_BASE}/api/v1/files/${fileId}`);
-  if (!res.ok) {
-    throw new Error(`Failed to fetch file from S3: ${res.statusText}`);
-  }
-  return await res.text();
 };
