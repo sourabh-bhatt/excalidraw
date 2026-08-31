@@ -464,9 +464,8 @@ app.get('/api/v1/scenes/:id', async (req, res) => {
             Key: `scenes/${id}.json`,
           })
         );
-        const buffer = await streamToBuffer(response.Body);
-        const scene = JSON.parse(buffer.toString('utf-8'));
-        return res.json(scene);
+        res.setHeader('Content-Type', 'application/json');
+        return response.Body.pipe(res);
       } catch (s3Err) {
         if (s3Err.name === 'NoSuchKey' || s3Err.$metadata?.httpStatusCode === 404) {
           return res.status(404).json({ error: 'Scene not found in S3' });
@@ -478,8 +477,8 @@ app.get('/api/v1/scenes/:id', async (req, res) => {
       if (!fs.existsSync(filePath)) {
         return res.status(404).json({ error: 'Scene not found locally' });
       }
-      const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-      return res.json(data);
+      res.setHeader('Content-Type', 'application/json');
+      return fs.createReadStream(filePath).pipe(res);
     }
   } catch (err) {
     console.error('Error loading scene:', err);
