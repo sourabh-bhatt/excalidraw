@@ -210,8 +210,8 @@ export const saveSceneToS3 = async ({
             created: fileData.created,
             lastRetrieved: fileData.lastRetrieved,
             version: fileData.version,
-            // Keep dataURL in scene for offline/fallback but avoid multi-megabyte duplicates
-            dataURL: fileData.dataURL,
+            // Keep dataURL empty in scene JSON to prevent multi-megabyte JSON memory bloat
+            dataURL: "" as any,
           };
         } else {
           sanitizedFiles[fileId as FileId] = fileData;
@@ -287,7 +287,31 @@ export const loadSceneFromS3 = async (id: string): Promise<S3SavedScene> => {
   if (!res.ok) {
     throw new Error(`Scene not found or failed to load: ${res.statusText}`);
   }
-  return await res.json();
+  const scene: S3SavedScene = await res.json();
+
+  // If files are referenced without full inline dataURLs, load them concurrently
+  if (scene.files && typeof scene.files === "object") {
+    const fileEntries = Object.entries(scene.files);
+    await Promise.all(
+      fileEntries.map(async ([fileId, fileData]) => {
+        if (fileData && !fileData.dataURL) {
+          try {
+            const dataURL = await getFileFromS3(fileId as FileId);
+            if (dataURL) {
+              scene.files[fileId as FileId] = {
+                ...fileData,
+                dataURL: dataURL as any,
+              };
+            }
+          } catch (e) {
+            console.warn(`[S3Storage] Could not fetch file ${fileId}:`, e);
+          }
+        }
+      }),
+    );
+  }
+
+  return scene;
 };
 
 /**
