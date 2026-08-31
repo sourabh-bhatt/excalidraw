@@ -12,6 +12,10 @@ import {
   linkCollabToS3Scene,
   markBoardAsDeleted,
   activeBoardAtom,
+  persistActiveBoard,
+  s3StorageHealthAtom,
+  s3ScenesListAtom,
+  s3ScenesLoadingAtom,
   type S3SceneMetadata,
 } from "../data/s3Storage";
 import { generateCollaborationLinkData } from "../data";
@@ -34,14 +38,10 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
   const [activeBoard, setActiveBoard] = useAtom(activeBoardAtom);
   const collabAPI = useAtomValue(collabAPIAtom);
   const [boardName, setBoardName] = useState(activeBoard.name || "");
-  const [scenes, setScenes] = useState<S3SceneMetadata[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [scenes, setScenes] = useAtom(s3ScenesListAtom);
+  const [loading, setLoading] = useAtom(s3ScenesLoadingAtom);
+  const [statusInfo, setStatusInfo] = useAtom(s3StorageHealthAtom);
   const [saving, setSaving] = useState(false);
-  const [statusInfo, setStatusInfo] = useState<{
-    storageMode: string;
-    bucket: string | null;
-    region: string | null;
-  } | null>(null);
   const [message, setMessage] = useState<{ type: "success" | "error" | "info"; text: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -61,7 +61,7 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
         }),
       );
     } catch (err: any) {
-      setMessage({ type: "error", text: "Failed to connect to storage backend" });
+      // Keep cached items if offline
     } finally {
       setLoading(false);
     }

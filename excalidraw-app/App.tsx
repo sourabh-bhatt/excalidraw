@@ -109,6 +109,11 @@ import {
   saveSceneToS3,
   linkCollabToS3Scene,
   activeBoardAtom,
+  persistActiveBoard,
+  checkBackendHealth,
+  listS3Scenes,
+  s3StorageHealthAtom,
+  s3ScenesListAtom,
 } from "./data/s3Storage";
 import {
   ExportToExcalidrawPlus,
@@ -514,6 +519,26 @@ const ExcalidrawWrapper = () => {
     );
   }, [setActiveBoard]);
 
+  // Persist active board to localStorage on change
+  useEffect(() => {
+    persistActiveBoard(activeBoard);
+  }, [activeBoard]);
+
+  // Background cache warming on app startup
+  useEffect(() => {
+    checkBackendHealth()
+      .then((health) => {
+        appJotaiStore.set(s3StorageHealthAtom, health);
+      })
+      .catch(() => {});
+
+    listS3Scenes()
+      .then((scenes) => {
+        appJotaiStore.set(s3ScenesListAtom, scenes);
+      })
+      .catch(() => {});
+  }, []);
+
   // Link active board with live collaboration room in S3
   useEffect(() => {
     if (isCollaborating && activeBoard.id) {
@@ -538,6 +563,15 @@ const ExcalidrawWrapper = () => {
   // 1-second periodic autosave ticker to guarantee cloud board is saved continuously
   useEffect(() => {
     if (!activeBoard.id || !excalidrawAPI) return;
+
+    // Initialize lastSavedVersionRef if not already tracked
+    if (lastSavedVersionRef.current === -1) {
+      const initialElements = excalidrawAPI.getSceneElements();
+      lastSavedVersionRef.current = initialElements.reduce(
+        (acc, el) => acc + (el.version || 0),
+        0,
+      );
+    }
 
     const intervalId = window.setInterval(() => {
       if (activeBoard.id && excalidrawAPI) {

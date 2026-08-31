@@ -40,12 +40,68 @@ export interface ActiveBoardInfo {
   lastCollabAt?: string | null;
 }
 
-export const activeBoardAtom = atom<ActiveBoardInfo>({
-  id: null,
-  name: null,
-  lastSavedAt: null,
-  isSaving: false,
+export const getPersistedActiveBoard = (): ActiveBoardInfo => {
+  try {
+    const raw = localStorage.getItem("s3_active_board");
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return { ...parsed, isSaving: false };
+    }
+  } catch (e) {
+    // fallback
+  }
+  return {
+    id: null,
+    name: null,
+    lastSavedAt: null,
+    isSaving: false,
+  };
+};
+
+export const persistActiveBoard = (info: ActiveBoardInfo) => {
+  try {
+    localStorage.setItem("s3_active_board", JSON.stringify({ ...info, isSaving: false }));
+  } catch (e) {
+    // ignore
+  }
+};
+
+export const getPersistedScenesList = (): S3SceneMetadata[] => {
+  try {
+    const raw = localStorage.getItem("s3_cached_scenes");
+    if (raw) {
+      return JSON.parse(raw);
+    }
+  } catch (e) {
+    // fallback
+  }
+  return [];
+};
+
+export const persistScenesList = (scenes: S3SceneMetadata[]) => {
+  try {
+    localStorage.setItem("s3_cached_scenes", JSON.stringify(scenes));
+  } catch (e) {
+    // ignore
+  }
+};
+
+export const activeBoardAtom = atom<ActiveBoardInfo>(getPersistedActiveBoard());
+
+export const s3StorageHealthAtom = atom<{
+  status: string;
+  storageMode: string;
+  bucket: string | null;
+  region: string | null;
+}>({
+  status: "ok",
+  storageMode: "AWS_S3",
+  bucket: "bluesky-excalidraw-storage",
+  region: "ap-south-1",
 });
+
+export const s3ScenesListAtom = atom<S3SceneMetadata[]>(getPersistedScenesList());
+export const s3ScenesLoadingAtom = atom<boolean>(false);
 
 /**
  * Generate full URL for a board (and optional live collaboration room)
@@ -97,7 +153,9 @@ export const listS3Scenes = async (): Promise<S3SceneMetadata[]> => {
     const res = await fetch(`${API_BASE}/api/v1/scenes`);
     if (!res.ok) throw new Error(`Failed to list scenes: ${res.statusText}`);
     const data = await res.json();
-    return data.scenes || [];
+    const scenes = data.scenes || [];
+    persistScenesList(scenes);
+    return scenes;
   } catch (err) {
     console.error("[S3Storage] Error listing scenes:", err);
     throw err;
