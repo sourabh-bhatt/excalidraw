@@ -25,15 +25,32 @@
         width: 10px;
         height: 10px;
         border-radius: 50%;
-        display: inline-block;
-
         &.online {
           background-color: #2b8a3e;
           box-shadow: 0 0 8px rgba(43, 138, 62, 0.5);
         }
+        &.connecting {
+          background-color: #f59f00;
+          box-shadow: 0 0 6px rgba(245, 159, 0, 0.4);
+          animation: status-pulse 1.5s infinite ease-in-out;
+        }
         &.fallback {
           background-color: #e67700;
         }
+        &.offline {
+          background-color: #e03131;
+        }
+      }
+    }
+
+    @keyframes status-pulse {
+      0%, 100% {
+        opacity: 1;
+        transform: scale(1);
+      }
+      50% {
+        opacity: 0.4;
+        transform: scale(0.85);
       }
     }
 

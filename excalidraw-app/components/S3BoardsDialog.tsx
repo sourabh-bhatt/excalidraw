@@ -539,7 +539,13 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
           <div className="s3-status-indicator">
             <span
               className={`status-dot ${
-                statusInfo?.storageMode === "AWS_S3" ? "online" : "fallback"
+                statusInfo?.storageMode === "AWS_S3"
+                  ? "online"
+                  : statusInfo?.storageMode === "LOCAL_FALLBACK"
+                  ? "fallback"
+                  : loading
+                  ? "connecting"
+                  : "offline"
               }`}
             />
             <span className="status-text">
@@ -547,6 +553,8 @@ export const S3BoardsDialog: React.FC<S3BoardsDialogProps> = ({
                 ? `AWS S3: ${statusInfo.bucket} (${statusInfo.region})`
                 : statusInfo?.storageMode === "LOCAL_FALLBACK"
                 ? "Storage: Local Dev Fallback (Configure AWS S3 in .env for Cloud)"
+                : loading
+                ? "Connecting to storage backend..."
                 : "Storage Backend Offline"}
             </span>
           </div>
